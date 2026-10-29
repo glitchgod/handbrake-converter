@@ -1,0 +1,45 @@
+name: Release plugin
+on:
+  push:
+    branches: [main]
+    paths-ignore: [manifest.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build, release, update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d ' \r\n' < VERSION)"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} already released. Bump VERSION to publish a new one."
+            exit 0
+          fi
+          NAME="HandBrake Converter"
+          GUID="6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90"
+          CHANGELOG="$(head -n1 CHANGELOG.txt | tr -d '"\r')"
+          ZIP="HandBrakeConverter_${VERSION}.zip"
+          NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          dotnet publish Jellyfin.Plugin.HandBrakeConverter -c Release -o out -p:AssemblyVersion="$VERSION" -p:FileVersion="$VERSION"
+          mkdir -p dist
+          cp out/Jellyfin.Plugin.HandBrakeConverter.dll dist/
+          printf '{"category":"General","changelog":"%s","description":"Re-encodes library videos with HandBrake on a schedule.","guid":"%s","name":"%s","overview":"Re-encodes library videos with HandBrake on a schedule.","owner":"glitch","targetAbi":"12.1.0.0","timestamp":"%s","version":"%s","status":"Active","autoUpdate":false,"assemblies":["Jellyfin.Plugin.HandBrakeConverter.dll"]}\n' "$CHANGELOG" "$GUID" "$NAME" "$NOW" "$VERSION" > dist/meta.json
+          (cd dist && zip -q -r "../$ZIP" .)
+          SUM="$(md5sum "$ZIP" | cut -d' ' -f1)"
+          printf '[{"guid":"%s","name":"%s","description":"Re-encodes library videos with HandBrake on a schedule.","overview":"Re-encodes library videos with HandBrake on a schedule.","owner":"glitch","category":"General","versions":[{"version":"%s","changelog":"%s","targetAbi":"12.1.0.0","sourceUrl":"https://github.com/%s/releases/download/v%s/%s","checksum":"%s","timestamp":"%s"}]}]\n' "$GUID" "$NAME" "$VERSION" "$CHANGELOG" "$REPO" "$VERSION" "$ZIP" "$SUM" "$NOW" > manifest.json
+          gh release create "v${VERSION}" "$ZIP" --title "v${VERSION}" --notes "$CHANGELOG"
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update manifest for v${VERSION}"
+          git push
