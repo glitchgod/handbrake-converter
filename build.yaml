@@ -1,0 +1,15 @@
+name: "HandBrake Converter"
+guid: "6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90"
+version: "1.0.0.0"
+targetAbi: "12.1.0.0"
+framework: "net10.0"
+owner: "glitch"
+overview: "Re-encodes library videos with HandBrake on a schedule."
+description: >
+  Background plugin that converts videos in chosen libraries using a portable HandBrakeCLI,
+  with per-weekday run windows, pause-while-streaming, a loop-proof converted-file database,
+  and an optional replace-original mode.
+category: "General"
+artifacts:
+  - "Jellyfin.Plugin.HandBrakeConverter.dll"
+changelog: "Initial release."

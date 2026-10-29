@@ -1,0 +1,832 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>HandBrake Converter</title>
+</head>
+<body>
+<div id="HBConvPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
+    <style>
+        #HBConvPage .hbTabs { display:flex; flex-wrap:wrap; gap:.2em; margin:.6em 0 1.4em; border-bottom:1px solid rgba(128,128,128,.35); }
+        #HBConvPage .hbTabBtn { background:none; border:none; color:inherit; font:inherit; padding:.6em 1em; cursor:pointer; border-bottom:3px solid transparent; opacity:.7; }
+        #HBConvPage .hbTabBtn.active { border-bottom-color:#00a4dc; opacity:1; }
+        #HBConvPage .hbBox { border:1px solid rgba(128,128,128,.35); border-radius:.4em; padding:1em; margin:.8em 0; }
+        #HBConvPage .hbRow { display:flex; align-items:center; flex-wrap:wrap; gap:.6em; padding:.3em .2em; border-bottom:1px solid rgba(128,128,128,.18); }
+        #HBConvPage .hbRow .grow { flex:1; min-width:0; }
+        #HBConvPage #hbQueueTools { display:flex; align-items:center; flex-wrap:wrap; gap:.8em; margin:.6em 0; }
+        #HBConvPage .hbBadge { font-size:.8em; padding:.1em .6em; border-radius:10px; background:rgba(128,128,128,.3); }
+        #HBConvPage .hbBadge.Running { background:#00a4dc; color:#fff; } #HBConvPage .hbBadge.Done, #HBConvPage .hbBadge.Converted { background:#2e8b57; color:#fff; }
+        #HBConvPage .hbBadge.Failed { background:#b33; color:#fff; } #HBConvPage .hbBadge.Skipped { background:#5a6b7b; color:#fff; } #HBConvPage .hbBadge.Queued { background:#8a6d1d; color:#fff; }
+        #HBConvPage .hbBar { background:rgba(128,128,128,.25); height:.5em; border-radius:.25em; margin:.6em 0; } #HBConvPage .hbBar > div { height:100%; border-radius:.25em; background:#00a4dc; width:0; }
+        #HBConvPage .hbDays { display:flex; flex-wrap:wrap; column-gap:1em; }
+        #HBConvPage .hbDays .checkboxContainer { margin-bottom:0; }
+        #HBConvPage .hbSub { margin-left:1em; padding-left:1em; border-left:.2em solid #00a4dc; }
+    </style>
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="HBConvForm">
+            <div class="hbTabs" id="hbTabs">
+                <button type="button" class="hbTabBtn active" data-tab="overview">Overview</button>
+                <button type="button" class="hbTabBtn" data-tab="libraries">Libraries (auto-convert)</button>
+                <button type="button" class="hbTabBtn" data-tab="convert">Manual convert</button>
+                <button type="button" class="hbTabBtn" data-tab="queue">Queue</button>
+                <button type="button" class="hbTabBtn" data-tab="history">History</button>
+                <button type="button" class="hbTabBtn" data-tab="defaults">Default settings</button>
+                <button type="button" class="hbTabBtn" data-tab="originals">Original files</button>
+                <button type="button" class="hbTabBtn" data-tab="schedule">Schedule &amp; performance</button>
+                <button type="button" class="hbTabBtn" data-tab="tools">HandBrake &amp; tools</button>
+            </div>
+
+            <!-- ============ OVERVIEW ============ -->
+            <div class="hbTab" data-tab="overview">
+                <div class="hbBox">
+                    <div id="hbStatus">Loading…</div>
+                    <div class="hbBar"><div id="hbBar"></div></div>
+                    <div id="hbStats" class="fieldDescription"></div>
+                    <button is="emby-button" type="button" class="raised" id="hbPauseBtn"><span>Pause</span></button>
+                    <span id="hbPauseNote" class="fieldDescription"></span>
+                </div>
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="Enabled" /><span>Enable HandBrake Converter</span></label>
+                    <div class="fieldDescription checkboxFieldDescription">Master switch. When off, nothing converts: neither Auto-convert (Libraries tab) nor the Queue (Manual convert tab).</div>
+                </div>
+            </div>
+
+            <!-- ============ LIBRARIES ============ -->
+            <div class="hbTab" data-tab="libraries" style="display:none">
+                <div class="fieldDescription">Choose which of your libraries are converted automatically in the background, and optionally give a library its own conversion settings. Each library is a card below; remember to press Save.</div>
+                <div id="hbLibs">Loading libraries…</div>
+            </div>
+
+            <!-- ============ MANUAL CONVERT ============ -->
+            <div class="hbTab" data-tab="convert" style="display:none">
+                <div class="fieldDescription">Convert specific movies, series, seasons or episodes on demand, with settings of your own for just that job. Pick a library, browse to a title, and it joins the Queue.</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Find titles</h2>
+                    <div class="fieldDescription">Choose a library to list its movies and series.</div>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="hbConvLib">Library</label>
+                        <select is="emby-select" id="hbConvLib" class="emby-select-withcolor emby-select"></select>
+                        <div class="fieldDescription">Its titles are listed as soon as you pick it.</div>
+                    </div>
+                    <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="hbConvSearch">Search title (optional)</label>
+                        <input is="emby-input" type="text" id="hbConvSearch" />
+                        <div class="fieldDescription">Only list titles containing this text. Leave blank to list everything.</div></div>
+                    <button is="emby-button" type="button" class="raised" id="hbConvGo"><span>Search</span></button>
+                </div>
+                <div class="verticalSection" id="hbConvResults" style="display:none">
+                    <h2 class="sectionTitle">Titles</h2>
+                    <div class="fieldDescription">Tick several to convert them together, or press Convert… on one. Open goes into a series or season.</div>
+                    <div id="hbCrumbs" class="fieldDescription" style="margin:.8em 0;"></div>
+                    <div id="hbConvList" style="display:none"></div>
+                    <div id="hbConvActions" style="display:none;margin:.6em 0;">
+                        <button is="emby-button" type="button" class="raised button-submit" id="hbConvSel"><span>Convert selected…</span></button>
+                        <span id="hbSelCount" class="fieldDescription"></span>
+                    </div>
+                </div>
+                <div class="verticalSection" id="hbConvOptions" style="display:none">
+                    <h2 class="sectionTitle">Convert: <span id="hbConvWhat"></span></h2>
+                    <div class="fieldDescription">Starts from the settings of the title's library (or the Default settings). Changes here only apply to this job.</div>
+                    <div id="hbConvProfile"></div>
+                    <div class="verticalSection">
+                        <h2 class="sectionTitle">Start</h2>
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbRunNow" /><span>Start immediately, ignoring the schedule</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">Only matters if you limited conversions to certain times on the Schedule tab.</div>
+                        </div>
+                        <button is="emby-button" type="button" class="raised button-submit" id="hbQueueBtn"><span>Add to queue</span></button>
+                        <button is="emby-button" type="button" class="raised" id="hbQueueCancel"><span>Cancel</span></button>
+                        <span id="hbQueueMsg"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ QUEUE ============ -->
+            <div class="hbTab" data-tab="queue" style="display:none">
+                <div class="fieldDescription">Shows the jobs you added from Manual convert, in the order they will run (queued jobs run before Auto-convert). Use the arrows to change the order, tick jobs to remove several at once, or press Stop to end the running one.</div>
+                <div class="verticalSection">
+                <h2 class="sectionTitle">Jobs</h2>
+                <div id="hbQueueTools">
+                    <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbSelAll" /><span>Select all</span></label>
+                    <button is="emby-button" type="button" class="raised" id="hbRemoveSel"><span>Remove selected</span></button>
+                </div>
+                <div id="hbQueue">Loading…</div>
+                </div>
+            </div>
+
+            <!-- ============ HISTORY ============ -->
+            <div class="hbTab" data-tab="history" style="display:none">
+                <div class="fieldDescription">A log of every file the plugin converted, skipped or failed, newest first: how much space it saved, how long it took, and why a file was skipped or failed. Retry puts a failed file back in line.</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Results</h2>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="hbHistFilter">Show</label>
+                        <select is="emby-select" id="hbHistFilter" class="emby-select-withcolor emby-select">
+                            <option value="">Everything</option>
+                            <option value="Converted">Converted</option>
+                            <option value="Skipped">Skipped</option>
+                            <option value="Failed">Failed</option>
+                        </select>
+                        <div class="fieldDescription">Only list files with this result. The last 500 results are kept.</div>
+                    </div>
+                    <div id="hbHistory">Loading…</div>
+                    <button is="emby-button" type="button" class="raised" id="hbHistClear"><span>Clear history</span></button>
+                </div>
+            </div>
+
+            <!-- ============ DEFAULT SETTINGS ============ -->
+            <div class="hbTab" data-tab="defaults" style="display:none">
+                <div class="fieldDescription">The conversion settings every library uses unless it has its own, and the starting point for Manual convert. Choose quality, audio, subtitles, file format and what happens to the original.</div>
+                <div id="hbDefaults"></div>
+            </div>
+
+            <!-- ============ ORIGINAL FILES ============ -->
+            <div class="hbTab" data-tab="originals" style="display:none">
+                <div class="fieldDescription">Rules for looking after your original files: what to check before and after a conversion, and how long replaced originals are kept so you can undo them. Whether a library keeps or replaces its originals is chosen in <b>Default settings</b> (or a library's own settings) under "Original file".</div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">1. Before converting</h2>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MinSizeMb">Auto-convert: skip files smaller than (MB)</label>
+                        <input is="emby-input" type="number" id="MinSizeMb" min="0" />
+                        <div class="fieldDescription">0 = convert files of any size. Handy for ignoring tiny clips and samples.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Keep at least this much free disk space (GB)</label>
+                        <input is="emby-input" type="number" id="MinFreeSpaceGb" min="0" />
+                        <div class="fieldDescription">A conversion only starts if the disk has room for the new file plus this much spare. Otherwise it waits.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">2. After converting: checks before anything is replaced</h2>
+                    <div class="fieldDescription">A converted file that fails a check is thrown away and the original is left exactly as it was.</div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="SkipIfNotSmaller" /><span>Only accept the converted file if it is smaller than the original</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Skipped for manual conversions that keep the original or burn in subtitles, since those are deliberate.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MinSavingsPercent">…and it must be at least this much smaller (%)</label>
+                        <input is="emby-input" type="number" id="MinSavingsPercent" min="0" max="95" />
+                        <div class="fieldDescription">Example: 20 means a 10 GB original is only replaced if the result is 8 GB or less. A result that saves less is discarded and the original kept. 0 = any saving is enough.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="VerifyDuration" /><span>Check the converted file before the original is replaced</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Compares the length, audio tracks, subtitle tracks, chapters and (when kept) HDR with the original, and throws the result away if anything is missing. Uses the ffprobe that comes with Jellyfin.</div>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">3. Replaced originals</h2>
+                    <div class="fieldDescription">When a library is set to <b>Replace original</b>, the old file is <b>moved</b> (not copied) into a hidden folder instead of being deleted, so you can undo a bad conversion. By default that folder is <code>.hb-originals</code> inside the same library folder, on the same drive as the video: the move is instant and writes nothing to your system disk, and Jellyfin skips the folder.</div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="KeepReplacedDays">Keep replaced originals for (days)</label>
+                        <input is="emby-input" type="number" id="KeepReplacedDays" min="0" />
+                        <div class="fieldDescription">After this many days they are deleted automatically. 0 = delete right away (no undo).</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="TrashFolder">Holding folder (optional, leave blank for the automatic one)</label>
+                        <input is="emby-input" type="text" id="TrashFolder" />
+                        <div class="fieldDescription">Blank = the automatic hidden folder described above (recommended). If you set your own, pick a folder on the same drive as your videos, outside your libraries; on a different drive every original is copied across, which is slow and wears that drive.</div>
+                    </div>
+                    <h3 class="sectionTitle">Currently on hold</h3>
+                    <div class="fieldDescription">Restore puts the original back next to the converted file as "Name - Original", which Jellyfin shows as a second version.</div>
+                    <div id="hbTrash"></div>
+                </div>
+            </div>
+
+            <!-- ============ SCHEDULE & PERFORMANCE ============ -->
+            <div class="hbTab" data-tab="schedule" style="display:none">
+                <div class="fieldDescription">Choose when conversions are allowed to run, and how they behave while running, such as pausing when someone is watching. Leave time limits off to convert whenever there is something to do.</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">When to convert</h2>
+                    <div class="fieldDescription">Set the days and hours when conversions may run.</div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="ScheduleEnabled" /><span>Only convert during certain times</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Off = conversions run whenever there is something to convert (they still pause while someone is watching, if you leave that on below).</div>
+                    </div>
+                    <div id="hbScheduleBody">
+                        <div class="fieldDescription">Add one or more time windows (server local time). Conversions only run inside a window. Example: every day 23:00 to 10:00. A window that ends earlier than it starts runs past midnight.</div>
+                        <div id="hbWindows"></div>
+                        <div style="margin:.6em 0;">
+                            <button is="emby-button" type="button" class="raised" id="hbAddWin"><span>Add time window</span></button>
+                            <button is="emby-button" type="button" class="raised" id="hbPresetNight"><span>Use: every night 23:00–10:00</span></button>
+                        </div>
+                        <div class="selectContainer">
+                            <label class="selectLabel" for="WindowEndMode">If a time window ends while a file is still converting</label>
+                            <select is="emby-select" id="WindowEndMode" class="emby-select-withcolor emby-select">
+                                <option value="finish">Let that file finish, then stop (suggested)</option>
+                                <option value="stop">Stop it now and start over in the next window</option>
+                            </select>
+                            <div class="fieldDescription">Decides what happens to a conversion that is still running when your time window closes.</div>
+                        </div>
+                        <h3 class="sectionTitle">Days when nothing runs</h3>
+                        <div class="fieldDescription">Optional date ranges to skip completely (holidays, travel).</div>
+                        <div id="hbBlackouts"></div>
+                        <button is="emby-button" type="button" class="raised" id="hbAddBlackout"><span>Add date range</span></button>
+                    </div>
+                </div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">While converting</h2>
+                    <div class="fieldDescription">How conversions behave while they are running, so they don't get in the way of watching.</div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="PauseWhileStreaming" /><span>Pause while someone is watching</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">The conversion freezes while anyone is playing something in Jellyfin and carries on when they stop. A file is never swapped while someone is watching that exact title.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="PausedCountsAsStreaming" /><span>Count paused playback as watching</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Normally a paused video doesn't stop a conversion. Turn this on if it should.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="IgnoreAudioPlayback" /><span>Ignore music (audio-only playback)</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Listening to music won't pause conversions, because it uses very little server power.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="LowPriority" /><span>Run in the background at low priority</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">Gives other programs on the server (including Jellyfin streaming) first call on the CPU, so the server stays responsive. Conversions take a little longer when the server is busy. Recommended.</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ HANDBRAKE & TOOLS ============ -->
+            <div class="hbTab" data-tab="tools" style="display:none">
+                <div class="fieldDescription">Checks that HandBrake is installed, and holds the housekeeping for Auto-convert: how often a failing file is retried, a preview of what it will process next, and a way to start its history over.</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">HandBrake</h2>
+                    <div class="fieldDescription">HandBrake is the program that does the actual converting. This checks that it is installed on the server.</div>
+                    <div id="hbHbStatus" style="margin:.6em 0;">Checking…</div>
+                    <div style="margin-bottom:.6em;"><button is="emby-button" type="button" class="raised" id="hbCheckBtn"><span>Check again</span></button></div>
+                    <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="HandBrakePath">HandBrakeCLI location (optional full path)</label>
+                        <input is="emby-input" type="text" id="HandBrakePath" />
+                        <div class="fieldDescription">Only needed if HandBrakeCLI is installed somewhere unusual. Leave blank and the plugin finds it by itself. Press Save before checking again if you change this.</div></div>
+                </div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Video encoders</h2>
+                    <div class="fieldDescription">The video encoders this HandBrake can use on this server. Hardware encoders (NVENC for NVIDIA, QSV for Intel) only appear when HandBrake finds the hardware. Test makes a 2-second sample encode to prove one really works.</div>
+                    <div id="hbEncoders">Checking…</div>
+                </div>
+
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Auto-convert</h2>
+                    <div class="fieldDescription">Settings for the background conversion of whole libraries (switched on per library in the Libraries tab).</div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="MaxFailures">Stop retrying a file after this many failed attempts</label>
+                        <input is="emby-input" type="number" id="MaxFailures" min="1" />
+                        <div class="fieldDescription">Applies to Auto-convert only. A file that keeps failing is skipped so it can't block the rest.</div>
+                    </div>
+                    <div class="fieldDescription">Lists the files Auto-convert will pick up next, so you can check it before it starts.</div>
+                    <button is="emby-button" type="button" class="raised" id="hbPendingBtn"><span>Show what Auto-convert would process</span></button>
+                    <button is="emby-button" type="button" class="raised" id="hbResetBtn"><span>Forget converted history</span></button>
+                    <div class="fieldDescription">Forgetting history lets already-converted files be converted again.</div>
+                    <pre id="hbPending" style="white-space:pre-wrap;max-height:14em;overflow:auto;display:none;"></pre>
+                </div>
+            </div>
+
+            <div class="verticalSection" id="hbSaveBar">
+                <button is="emby-button" type="submit" class="raised button-submit block emby-button" id="hbSave"><span>Save</span></button>
+            </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="text/javascript">
+    (function () {
+        var pluginId = '6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90';
+        var page = document.querySelector('#HBConvPage');
+        var cfg = null, folders = [], timer = null, activeTab = 'overview';
+        var conv = { libId: '', stack: [], selected: {}, names: {} };
+        var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+        var ENCODERS = [['x265', 'x265 (CPU, HEVC)'], ['x264', 'x264 (CPU, H.264)'], ['svt_av1', 'SVT-AV1 (CPU)'],
+            ['nvenc_h265', 'NVENC H.265 (NVIDIA)'], ['nvenc_h264', 'NVENC H.264 (NVIDIA)'], ['nvenc_av1', 'NVENC AV1 (RTX 40+)'],
+            ['qsv_h265', 'QSV H.265 (Intel)'], ['qsv_av1', 'QSV AV1 (Intel Arc)']];
+        var SPEEDS = ['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow', 'slower', 'veryslow'].map(function (x) { return [x, x]; });
+        var HEIGHTS = [[0, 'Same as source'], [2160, '2160p (4K) max'], [1440, '1440p max'], [1080, '1080p max'], [720, '720p max'], [576, '576p max'], [480, '480p max']];
+        var ENC_LABELS = {
+            x265: 'x265 (CPU, HEVC)', x265_10bit: 'x265 10-bit (CPU, HEVC)', x264: 'x264 (CPU, H.264)', x264_10bit: 'x264 10-bit (CPU, H.264)',
+            svt_av1: 'SVT-AV1 (CPU)', svt_av1_10bit: 'SVT-AV1 10-bit (CPU)',
+            nvenc_h265: 'NVENC H.265 (NVIDIA)', nvenc_h265_10bit: 'NVENC H.265 10-bit (NVIDIA)', nvenc_h264: 'NVENC H.264 (NVIDIA)',
+            nvenc_av1: 'NVENC AV1 (RTX 40+)', nvenc_av1_10bit: 'NVENC AV1 10-bit (RTX 40+)',
+            qsv_h265: 'QSV H.265 (Intel)', qsv_h265_10bit: 'QSV H.265 10-bit (Intel)', qsv_h264: 'QSV H.264 (Intel)', qsv_av1: 'QSV AV1 (Intel Arc)', qsv_av1_10bit: 'QSV AV1 10-bit (Intel Arc)'
+        };
+        var installedEncoders = null; // names HandBrake lists on this server, or null when unknown
+        function encoderOptions(current) {
+            var known = installedEncoders && installedEncoders.length;
+            var names = Object.keys(ENC_LABELS).filter(function (n) { return known ? installedEncoders.indexOf(n) >= 0 : ENCODERS.some(function (e) { return e[0] === n; }); });
+            var opts = names.map(function (n) { return [n, ENC_LABELS[n]]; });
+            if (current && names.indexOf(current) < 0) opts.push([current, (ENC_LABELS[current] || current) + (known ? ' (not installed here)' : '')]);
+            return opts;
+        }
+        // Marks the recommended choice in a dropdown: what Jellyfin's transcode logs point to when they have a clear answer, else a sensible default
+        function S(opts, val, key) {
+            var fromLogs = key && playbackSug[key] != null && opts.some(function (o) { return String(o[0]) === String(playbackSug[key]); });
+            var pick = fromLogs ? playbackSug[key] : val;
+            return opts.map(function (o) { return String(o[0]) === String(pick) ? [o[0], o[1] + (fromLogs ? ' (suggested from your playback)' : ' (suggested)')] : o; });
+        }
+        var HIDE_TYPES = ['music', 'books', 'playlists', 'livetv', 'boxsets'];
+
+        function $(sel, root) { return (root || page).querySelector(sel); }
+        function $$(sel, root) { return Array.prototype.slice.call((root || page).querySelectorAll(sel)); }
+        function esc(s) { var d = document.createElement('div'); d.textContent = s == null ? '' : String(s); return d.innerHTML; }
+        function clone(o) { return JSON.parse(JSON.stringify(o)); }
+        function api(type, path, body) {
+            var o = { type: type, url: ApiClient.getUrl('HandBrakeConverter/' + path), dataType: 'json' };
+            if (body !== undefined) { o.data = JSON.stringify(body); o.contentType = 'application/json'; }
+            return ApiClient.ajax(o);
+        }
+        function errText(x, fallback) {
+            return new Promise(function (res) {
+                try { x.json().then(function (j) { res((j && (j.Error || j.title)) || fallback); }, function () { res(fallback); }); } catch (e) { res(fallback); }
+            });
+        }
+
+        // ---------------------------------------------------------------- profile editor (shared by Defaults, Libraries, Convert)
+        var uid = 0;
+        function nid() { return 'hbf' + (++uid); }
+        function desc(d) { return d ? '<div class="fieldDescription">' + d + '</div>' : ''; }
+        function sel(k, label, opts, val, d) {
+            var id = nid();
+            return '<div class="selectContainer"><label class="selectLabel" for="' + id + '">' + esc(label) + '</label><select is="emby-select" id="' + id + '" data-k="' + k + '" class="emby-select-withcolor emby-select">' +
+                opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(val) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>' + desc(d) + '</div>';
+        }
+        function num(k, label, val, min, d) {
+            var id = nid();
+            return '<div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="' + id + '">' + esc(label) + '</label><input is="emby-input" id="' + id + '" type="number" data-k="' + k + '" min="' + (min || 0) + '" value="' + esc(val == null ? 0 : val) + '" />' + desc(d) + '</div>';
+        }
+        function txt(k, label, val, d) {
+            var id = nid();
+            return '<div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="' + id + '">' + esc(label) + '</label><input is="emby-input" id="' + id + '" type="text" data-k="' + k + '" value="' + esc(val || '') + '" />' + desc(d) + '</div>';
+        }
+        function chk(k, label, val, d) {
+            return '<div class="checkboxContainer' + (d ? ' checkboxContainer-withDescription' : '') + '"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" data-k="' + k + '"' + (val ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label>' +
+                (d ? '<div class="fieldDescription checkboxFieldDescription">' + d + '</div>' : '') + '</div>';
+        }
+        // One checkbox with Jellyfin's own markup (used where a plain checkbox is needed outside the helpers above)
+        function box(cls, attrs, checked, label) {
+            return '<label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="' + cls + '" ' + attrs + (checked ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label>';
+        }
+
+        function profileHtml(p) {
+            p = p || {}; var h = p.HandBrake || {};
+            var burn = (h.SubtitleMode === 'burn');
+            return '<div class="hbProfile">' +
+                '<div class="verticalSection"><h2 class="sectionTitle">Video</h2>' + desc('How the picture is re-encoded.') +
+                    sel('hb.Encoder', 'Video encoder', S(encoderOptions(h.Encoder || 'x265'), 'x265', 'hb.Encoder'), h.Encoder || 'x265', 'x265 makes the smallest files. NVENC/QSV use your graphics card but only work if the server has a supported graphics card and drivers.') +
+                    num('hb.Quality', 'Quality (lower number = better quality, bigger file)', h.Quality == null ? 22 : h.Quality, 0, 'Around 20–24 is a good range for x265 and x264.') +
+                    sel('hb.EncoderPreset', 'Encoding speed (x264, x265, SVT-AV1 only)', S(SPEEDS, 'fast'), h.EncoderPreset || 'medium', 'Slower = smaller file for the same quality.') +
+                    sel('hb.MaxHeight', 'Resolution', S(HEIGHTS, 1080, 'hb.MaxHeight'), h.MaxHeight || 0, 'A "max" setting only shrinks bigger videos. Smaller ones are never enlarged. 1080p max is a good balance: 4K files take several times longer to convert.') +
+                    sel('hb.HdrMode', 'HDR videos', S([['skip', 'Leave them alone'], ['keep', 'Convert and keep HDR (10-bit)'], ['ignore', 'Convert like any other video']], 'skip'), h.HdrMode || 'skip',
+                        'HDR and Dolby Vision videos look washed out if re-encoded the usual way. Leave them alone skips those files. Convert and keep HDR re-encodes in 10-bit, keeps the HDR information and checks it survived (Dolby Vision is always left alone). The last option converts them regardless.') +
+                '</div>' +
+                '<div class="verticalSection"><h2 class="sectionTitle">Audio</h2>' + desc('What happens to the sound tracks.') +
+                    sel('hb.AudioMode', 'Audio', S([['copy', 'Same as source (copy all tracks)'], ['aac', 'Convert to AAC'], ['ac3', 'Convert to AC3']], 'copy', 'hb.AudioMode'), h.AudioMode || 'copy', 'Same as source keeps every audio track untouched. Converting makes files smaller but is slightly lower quality.') +
+                    num('hb.AudioBitrate', 'Bitrate (kbps), when converting audio', h.AudioBitrate == null ? 160 : h.AudioBitrate, 32, 'Higher means better sound and bigger files; 128–192 is typical. Ignored when the audio is copied.') +
+                '</div>' +
+                '<div class="verticalSection"><h2 class="sectionTitle">Subtitles</h2>' + desc('What happens to the subtitle tracks.') +
+                    sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Same as source (keep all tracks)'], ['none', 'Remove all subtitles'], ['burn', 'Burn one track into the video']], 'keep'), h.SubtitleMode || 'keep',
+                        'Burning makes the text part of the picture (it can\'t be turned off) and removes the other subtitle tracks.') +
+                    '<div class="hbBurn hbSub" style="display:' + (burn ? 'block' : 'none') + ';">' +
+                        txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') +
+                        num('hb.BurnTrack', 'Or an exact subtitle track number (0 = use the language)', h.BurnTrack || 0, 0, 'Picks one specific subtitle track by its number in the file instead of by language. 0 means use the language above.') +
+                        chk('hb.BurnForcedOnly', 'Forced subtitles only (signs and foreign-language parts)', h.BurnForcedOnly, 'Burns in only the subtitles marked as forced, which are usually signs or short foreign-language lines.') +
+                    '</div>' +
+                '</div>' +
+                '<div class="verticalSection"><h2 class="sectionTitle">File</h2>' + desc('Which file format to use and what happens to the original file.') +
+                    sel('hb.Container', 'Container', S([['source', 'Same as source'], ['mkv', 'MKV'], ['mp4', 'MP4']], 'source'), h.Container || 'source',
+                        '"Same as source" keeps MKV as MKV and MP4 as MP4. Other formats (AVI, TS…) become MKV. When an original is replaced, its file name and container never change, so Jellyfin keeps your watch history.') +
+                    sel('p.DeleteOriginal', 'Original file', S([['keep', 'Keep it, and save the converted file next to it'], ['replace', 'Replace it with the converted file']], 'replace'), p.DeleteOriginal ? 'replace' : 'keep',
+                        'Replaced originals are held for a while so you can undo. See the Original files tab for the safety checks and hold time.') +
+                    '<div class="hbSuffix hbSub" style="display:' + (p.DeleteOriginal ? 'none' : 'block') + ';">' +
+                        txt('p.OutputSuffix', 'Label added to the converted file\'s name', p.OutputSuffix == null ? '- HandBrake' : p.OutputSuffix, 'Example: "Movie.mkv" becomes "Movie - HandBrake.mkv". Jellyfin shows the two as versions of the same movie or episode.') +
+                    '</div>' +
+                '</div>' +
+                '<details style="margin:.8em 0;"><summary>Advanced</summary>' +
+                    txt('hb.ExtraArgs', 'Extra HandBrakeCLI options', h.ExtraArgs, 'For experts: options typed here are added to the end of the HandBrakeCLI command, e.g. <code>--crop-mode none</code>. Leave blank if unsure.') +
+                '</details>' +
+            '</div>';
+        }
+
+        // <select> values are strings; the server expects real numbers for these (System.Text.Json rejects "720" for an int)
+        var NUMERIC_KEYS = ['MaxHeight', 'Quality', 'AudioBitrate', 'BurnTrack'];
+
+        function readProfile(root) {
+            var p = { HandBrake: {} };
+            $$('[data-k]', root).forEach(function (el) {
+                var parts = el.getAttribute('data-k').split('.');
+                var target = parts[0] === 'hb' ? p.HandBrake : p;
+                var key = parts[1], v;
+                if (el.type === 'checkbox') v = el.checked;
+                else if (key === 'DeleteOriginal') v = el.value === 'replace';
+                else if (el.type === 'number' || NUMERIC_KEYS.indexOf(key) >= 0) v = parseInt(el.value || '0', 10) || 0;
+                else v = el.value;
+                target[key] = v;
+            });
+            return p;
+        }
+
+        page.addEventListener('change', function (e) {
+            var t = e.target;
+            if (t && t.getAttribute && t.getAttribute('data-k') === 'p.DeleteOriginal') {
+                var pr = t.closest('.hbProfile');
+                var suf = pr && pr.querySelector('.hbSuffix');
+                if (suf) suf.style.display = t.value === 'replace' ? 'none' : 'block';
+            }
+            if (t && t.id === 'ScheduleEnabled') $('#hbScheduleBody').style.display = t.checked ? 'block' : 'none';
+            if (t && t.getAttribute && t.getAttribute('data-k') === 'hb.SubtitleMode') {
+                var prof = t.closest('.hbProfile');
+                var burn = prof && prof.querySelector('.hbBurn');
+                if (burn) burn.style.display = t.value === 'burn' ? 'block' : 'none';
+            }
+            if (t && t.classList && t.classList.contains('hbCustom')) {
+                var card = t.closest('.hbLib');
+                var holder = card.querySelector('.hbLibProfile');
+                if (t.checked && card.getAttribute('data-seeded') !== '1') {
+                    holder.innerHTML = profileHtml(readProfile($('#hbDefaults'))); // start from the Default settings
+                    card.setAttribute('data-seeded', '1');
+                }
+                holder.style.display = t.checked ? 'block' : 'none';
+            }
+            if (t && t.classList && t.classList.contains('hbPick')) {
+                var id = t.getAttribute('data-id');
+                if (t.checked) { conv.selected[id] = true; conv.names[id] = t.getAttribute('data-name'); } else { delete conv.selected[id]; }
+                updateSelCount();
+            }
+        });
+
+        // ---------------------------------------------------------------- tabs
+        function showTab(name) {
+            activeTab = name;
+            $$('.hbTabBtn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === name); });
+            $$('.hbTab').forEach(function (t) { t.style.display = t.getAttribute('data-tab') === name ? 'block' : 'none'; });
+            $('#hbSaveBar').style.display = (name === 'convert' || name === 'queue' || name === 'history') ? 'none' : 'block';
+            if (name === 'queue') refreshQueue();
+            if (name === 'history') refreshHistory();
+            if (name === 'originals') refreshTrash();
+        }
+        $('#hbTabs').addEventListener('click', function (e) {
+            var b = e.target.closest('.hbTabBtn');
+            if (b) showTab(b.getAttribute('data-tab'));
+        });
+
+        // ---------------------------------------------------------------- schedule editors
+        function renderWindows(list) {
+            var host = $('#hbWindows'); host.innerHTML = '';
+            list.forEach(function (w, i) {
+                var row = document.createElement('div');
+                row.className = 'hbWin hbRow'; row.style.flexWrap = 'wrap';
+                var days = '<div class="hbDays">' + DAYS.map(function (d, n) {
+                    return '<div class="checkboxContainer">' + box('hbDay', 'data-d="' + n + '"', (w.Days || []).indexOf(n) >= 0, d) + '</div>';
+                }).join('') + '</div>';
+                row.innerHTML = days + '<span><input type="time" class="hbStart" value="' + esc(w.Start) + '"> to <input type="time" class="hbEnd" value="' + esc(w.End) + '"></span>' +
+                    '<button type="button" class="hbDel raised hbSmall">Remove</button>';
+                row.querySelector('.hbDel').addEventListener('click', function () { var l = readWindows(); l.splice(i, 1); renderWindows(l); });
+                host.appendChild(row);
+            });
+        }
+        function readWindows() {
+            return $$('.hbWin').map(function (row) {
+                return {
+                    Days: $$('.hbDay', row).filter(function (c) { return c.checked; }).map(function (c) { return parseInt(c.getAttribute('data-d'), 10); }),
+                    Start: $('.hbStart', row).value || '23:00',
+                    End: $('.hbEnd', row).value || '10:00'
+                };
+            });
+        }
+        function renderBlackouts(list) {
+            var host = $('#hbBlackouts'); host.innerHTML = '';
+            list.forEach(function (b, i) {
+                var row = document.createElement('div');
+                row.className = 'hbBo hbRow';
+                row.innerHTML = '<input type="date" class="hbFrom" value="' + esc(b.From) + '"> to <input type="date" class="hbTo" value="' + esc(b.To) + '">' +
+                    '<button type="button" class="hbDel raised hbSmall">Remove</button>';
+                row.querySelector('.hbDel').addEventListener('click', function () { var l = readBlackouts(); l.splice(i, 1); renderBlackouts(l); });
+                host.appendChild(row);
+            });
+        }
+        function readBlackouts() {
+            return $$('.hbBo').map(function (row) {
+                return { From: $('.hbFrom', row).value, To: $('.hbTo', row).value || $('.hbFrom', row).value };
+            }).filter(function (b) { return b.From; });
+        }
+
+        // ---------------------------------------------------------------- libraries tab
+        function visibleFolders() {
+            return (folders || []).filter(function (f) { return HIDE_TYPES.indexOf((f.CollectionType || '').toLowerCase()) < 0; });
+        }
+        function renderLibraries() {
+            var host = $('#hbLibs');
+            var list = visibleFolders();
+            if (!list.length) { host.textContent = 'No video libraries found.'; return; }
+            host.innerHTML = list.map(function (f) {
+                var s = (cfg.Libraries || []).filter(function (x) { return (x.LibraryId || '').toLowerCase() === (f.ItemId || '').toLowerCase(); })[0] ||
+                    { AutoProcess: false, UseCustom: false, Profile: clone(cfg.Defaults || {}) };
+                return '<div class="hbLib hbBox" data-id="' + esc(f.ItemId) + '" data-name="' + esc(f.Name) + '"' + (s.UseCustom ? ' data-seeded="1"' : '') + '>' +
+                    '<h2 class="sectionTitle" style="margin-top:0">' + esc(f.Name) + ' <small class="fieldDescription">(' + esc(f.CollectionType || 'mixed') + ')</small></h2>' +
+                    '<div class="checkboxContainer checkboxContainer-withDescription">' + box('hbAuto', '', s.AutoProcess, 'Auto-convert this library') + '<div class="fieldDescription checkboxFieldDescription">Converts everything in it in the background, now and as new files arrive.</div></div>' +
+                    '<div class="checkboxContainer checkboxContainer-withDescription">' + box('hbCustom', '', s.UseCustom, 'Use settings specific to this library') + '<div class="fieldDescription checkboxFieldDescription">Off = uses the Default settings tab. On = starts from a copy of the Default settings, which you can then change for this library.</div></div>' +
+                    '<div class="hbLibProfile" style="display:' + (s.UseCustom ? 'block' : 'none') + '">' + profileHtml(s.Profile) + '</div></div>';
+            }).join('');
+        }
+        function readLibraries() {
+            return $$('.hbLib').map(function (card) {
+                return {
+                    LibraryId: card.getAttribute('data-id'),
+                    Name: card.getAttribute('data-name'),
+                    AutoProcess: $('.hbAuto', card).checked,
+                    UseCustom: $('.hbCustom', card).checked,
+                    Profile: readProfile($('.hbLibProfile', card))
+                };
+            });
+        }
+        function effectiveProfileFor(libId) {
+            var card = $$('.hbLib').filter(function (c) { return (c.getAttribute('data-id') || '').toLowerCase() === (libId || '').toLowerCase(); })[0];
+            if (card && $('.hbCustom', card).checked) return readProfile($('.hbLibProfile', card));
+            return readProfile($('#hbDefaults'));
+        }
+
+        // ---------------------------------------------------------------- convert tab
+        function fillConvLibs() {
+            var el = $('#hbConvLib');
+            el.innerHTML = '<option value="">— Pick library —</option>' + visibleFolders().map(function (f) { return '<option value="' + esc(f.ItemId) + '">' + esc(f.Name) + '</option>'; }).join('');
+        }
+        function updateSelCount() {
+            var n = Object.keys(conv.selected).length;
+            $('#hbSelCount').textContent = n ? n + ' selected' : '';
+            $('#hbConvActions').style.display = ($('#hbConvList').style.display !== 'none') ? 'block' : 'none';
+        }
+        function crumbs() {
+            var parts = ['<a href="#" class="hbCrumb" data-i="-1">' + esc(($('#hbConvLib').selectedOptions[0] || {}).text || 'Library') + '</a>'];
+            conv.stack.forEach(function (s, i) { parts.push('<a href="#" class="hbCrumb" data-i="' + i + '">' + esc(s.name) + '</a>'); });
+            $('#hbCrumbs').innerHTML = conv.libId ? parts.join(' &rsaquo; ') : '';
+        }
+        function browse() {
+            var libId = $('#hbConvLib').value;
+            if (!libId) { conv.libId = ''; $('#hbConvResults').style.display = 'none'; $('#hbConvOptions').style.display = 'none'; return; }
+            $('#hbConvResults').style.display = 'block';
+            if (libId !== conv.libId) { conv.libId = libId; conv.stack = []; conv.selected = {}; conv.names = {}; }
+            var q = conv.stack.length ? 'parentId=' + conv.stack[conv.stack.length - 1].id : 'libraryId=' + libId + '&search=' + encodeURIComponent($('#hbConvSearch').value || '');
+            $('#hbConvOptions').style.display = 'none';
+            api('GET', 'Browse?' + q).then(function (items) {
+                var list = $('#hbConvList'); list.style.display = 'block';
+                crumbs();
+                if (!items.length) { list.innerHTML = '<div class="fieldDescription">Nothing found.</div>'; updateSelCount(); return; }
+                list.innerHTML = items.map(function (i) {
+                    var label = (i.Kind === 'Episode' && i.Index != null ? i.Index + '. ' : '') + i.Name + (i.Year ? ' (' + i.Year + ')' : '');
+                    var drill = (i.Kind === 'Series' || i.Kind === 'Season');
+                    return '<div class="hbRow"><div class="checkboxContainer grow" style="margin-bottom:0">' + box('hbPick', 'data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '"', conv.selected[i.Id], label) + '</div><span class="hbBadge">' + esc(i.Kind) + '</span>' +
+                        (drill ? '<button type="button" class="raised hbSmall hbOpen" data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '">Open</button>' : '') +
+                        '<button type="button" class="raised hbSmall hbOne" data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '">Convert…</button></div>';
+                }).join('');
+                updateSelCount();
+            }, function () { $('#hbConvList').style.display = 'block'; $('#hbConvList').textContent = 'Could not load items.'; });
+        }
+        function openOptions(ids) {
+            var names = ids.map(function (id) { return conv.names[id] || id; });
+            $('#hbConvWhat').textContent = names.length > 3 ? names.slice(0, 3).join(', ') + ' + ' + (names.length - 3) + ' more' : names.join(', ');
+            $('#hbConvProfile').innerHTML = profileHtml(effectiveProfileFor(conv.libId));
+            $('#hbRunNow').checked = false;
+            $('#hbQueueMsg').textContent = '';
+            $('#hbConvOptions').style.display = 'block';
+            $('#hbConvOptions').setAttribute('data-ids', ids.join(','));
+            $('#hbConvOptions').scrollIntoView && $('#hbConvOptions').scrollIntoView({ behavior: 'smooth' });
+        }
+        $('#hbConvGo').addEventListener('click', function () { conv.stack = []; browse(); });
+        $('#hbConvLib').addEventListener('change', function () { conv.stack = []; conv.libId = ''; browse(); });
+        $('#hbConvList').addEventListener('click', function (e) {
+            var o = e.target.closest('.hbOpen'), one = e.target.closest('.hbOne');
+            if (o) { conv.stack.push({ id: o.getAttribute('data-id'), name: o.getAttribute('data-name') }); browse(); }
+            if (one) { var id = one.getAttribute('data-id'); conv.names[id] = one.getAttribute('data-name'); openOptions([id]); }
+        });
+        $('#hbCrumbs').addEventListener('click', function (e) {
+            var c = e.target.closest('.hbCrumb'); if (!c) return;
+            e.preventDefault();
+            conv.stack = conv.stack.slice(0, parseInt(c.getAttribute('data-i'), 10) + 1);
+            browse();
+        });
+        $('#hbConvSel').addEventListener('click', function () {
+            var ids = Object.keys(conv.selected);
+            if (!ids.length) { $('#hbSelCount').textContent = 'Tick at least one item first.'; return; }
+            openOptions(ids);
+        });
+        $('#hbQueueCancel').addEventListener('click', function () { $('#hbConvOptions').style.display = 'none'; });
+        $('#hbQueueBtn').addEventListener('click', function () {
+            var ids = ($('#hbConvOptions').getAttribute('data-ids') || '').split(',').filter(Boolean);
+            var body = { ItemIds: ids, Profile: readProfile($('#hbConvProfile')), IgnoreSchedule: $('#hbRunNow').checked };
+            var msg = $('#hbQueueMsg'); msg.textContent = 'Queuing…';
+            api('POST', 'Queue', body).then(function (r) {
+                msg.textContent = 'Queued ' + r.Added + ' file(s)' + (r.AlreadyQueued ? ', ' + r.AlreadyQueued + ' already queued' : '') + (r.NothingFound ? ', ' + r.NothingFound + ' item(s) had no files' : '') + '.';
+                conv.selected = {}; $$('.hbPick').forEach(function (c) { c.checked = false; }); updateSelCount();
+            }, function (x) { errText(x, 'Could not queue.').then(function (t) { msg.textContent = t; }); });
+        });
+
+        // ---------------------------------------------------------------- queue tab
+        function fmtBytes(n) { return n > 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : (n / 1048576).toFixed(0) + ' MB'; }
+        var lastStatus = null;
+        var picked = {};
+        function refreshQueue() {
+            api('GET', 'Queue').then(function (jobs) {
+                var host = $('#hbQueue');
+                var ids = {}; jobs.forEach(function (j) { ids[j.Id] = 1; });
+                Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
+                if (!jobs.length) { host.innerHTML = '<div class="fieldDescription">The queue is empty. Use the Manual convert tab to add items.</div>'; return; }
+                var firstQ = -1, lastQ = -1;
+                jobs.forEach(function (j, n) { if (j.Status === 'Queued') { if (firstQ < 0) firstQ = n; lastQ = n; } });
+                host.innerHTML = jobs.map(function (j, n) {
+                    var running = j.Status === 'Running' && lastStatus && lastStatus.CurrentJobId === j.Id;
+                    var prog = running ? ' — ' + (lastStatus.Progress || 0).toFixed(1) + '%' + (lastStatus.Eta ? ' ETA ' + lastStatus.Eta : '') + (lastStatus.Suspended ? ' (' + (lastStatus.Paused ? 'paused' : 'suspended: streaming') + ')' : '') : '';
+                    var opts = [j.Encoder, j.MaxHeight ? j.MaxHeight + 'p' : 'source res', 'subs: ' + j.Subtitles, j.DeleteOriginal ? 'replaces original' : 'keeps original', j.IgnoreSchedule ? 'run now' : 'in schedule'].join(' · ');
+                    var btn = function (to, label, off) { return '<button type="button" class="raised hbSmall hbMove" data-id="' + esc(j.Id) + '" data-to="' + to + '"' + (off ? ' disabled' : '') + '>' + label + '</button>'; };
+                    var act = j.Status === 'Queued' ? btn('top', 'Top', n === firstQ) + btn('up', '▲', n === firstQ) + btn('down', '▼', n === lastQ)
+                        : j.Status === 'Running' ? '<button type="button" class="raised hbSmall hbStop" data-id="' + esc(j.Id) + '">Stop</button>' : '';
+                    return '<div class="hbRow"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbJobPick" data-id="' + esc(j.Id) + '"' + (picked[j.Id] ? ' checked' : '') + ' /><span></span></label>' +
+                        '<span class="hbBadge ' + esc(j.Status) + '">' + esc(j.Status) + '</span>' +
+                        '<span class="grow" title="' + esc(j.Path) + '"><b>' + esc(j.Title) + '</b>' + esc(prog) + '<br><small class="fieldDescription">' + esc(opts) + (j.Error ? ' — ' + esc(j.Error) : '') + '</small></span>' + act + '</div>';
+                }).join('');
+            });
+        }
+        function queueAction(path, body) { return api('POST', path, body).then(refreshQueue); }
+        $('#hbQueue').addEventListener('click', function (e) {
+            var m = e.target.closest('.hbMove'), st = e.target.closest('.hbStop');
+            if (m) queueAction('Queue/' + m.getAttribute('data-id') + '/Move?to=' + m.getAttribute('data-to'));
+            if (st) queueAction('Queue/Remove', { Ids: [st.getAttribute('data-id')] });
+        });
+        $('#hbQueue').addEventListener('change', function (e) {
+            var c = e.target.closest('.hbJobPick'); if (!c) return;
+            if (c.checked) picked[c.getAttribute('data-id')] = 1; else delete picked[c.getAttribute('data-id')];
+        });
+        $('#hbSelAll').addEventListener('change', function () {
+            var on = this.checked;
+            $$('#hbQueue .hbJobPick').forEach(function (c) { c.checked = on; if (on) picked[c.getAttribute('data-id')] = 1; else delete picked[c.getAttribute('data-id')]; });
+        });
+        $('#hbRemoveSel').addEventListener('click', function () {
+            var ids = Object.keys(picked);
+            if (!ids.length) return;
+            if (confirm('Remove ' + ids.length + ' job(s)? A running one will be stopped.')) { picked = {}; $('#hbSelAll').checked = false; queueAction('Queue/Remove', { Ids: ids }); }
+        });
+        // ---------------------------------------------------------------- history tab
+        function fmtTime(sec) { sec = Math.round(sec || 0); var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? h + ' h ' + m + ' min' : m ? m + ' min' : sec + ' s'; }
+        var historyRows = [];
+        function renderHistory() {
+            var f = $('#hbHistFilter').value, host = $('#hbHistory');
+            var rows = historyRows.filter(function (h) { return !f || h.Result === f; });
+            if (!rows.length) { host.innerHTML = '<div class="fieldDescription">Nothing here yet.</div>'; return; }
+            host.innerHTML = rows.map(function (h) {
+                var detail = h.Result === 'Converted'
+                    ? fmtBytes(h.OldBytes) + ' → ' + fmtBytes(h.NewBytes) + ' (saved ' + fmtBytes(h.OldBytes - h.NewBytes) + ', ' + Math.round(100 * (h.OldBytes - h.NewBytes) / Math.max(1, h.OldBytes)) + '%) · took ' + fmtTime(h.Seconds)
+                    : h.Detail;
+                var when = String(h.Time).replace('T', ' ').substring(0, 16);
+                return '<div class="hbRow"><span class="hbBadge ' + esc(h.Result) + '">' + esc(h.Result) + '</span>' +
+                    '<span class="grow" title="' + esc(h.Path) + '"><b>' + esc(h.Title) + '</b><br><small class="fieldDescription">' + esc(detail) + ' · ' + esc(when) + ' · ' + (h.Source === 'queue' ? 'manual' : 'auto') + '</small></span>' +
+                    (h.Result === 'Failed' ? '<button type="button" class="raised hbSmall hbRetry" data-id="' + esc(h.Id) + '">Retry</button>' : '') + '</div>';
+            }).join('');
+        }
+        function refreshHistory() { api('GET', 'History').then(function (r) { historyRows = r; renderHistory(); }); }
+        $('#hbHistFilter').addEventListener('change', renderHistory);
+        $('#hbHistory').addEventListener('click', function (e) {
+            var r = e.target.closest('.hbRetry'); if (!r) return;
+            api('POST', 'History/' + r.getAttribute('data-id') + '/Retry').then(function () { r.textContent = 'Queued again'; r.disabled = true; },
+                function (x) { errText(x, 'Could not retry.').then(function (t) { alert(t); }); });
+        });
+        $('#hbHistClear').addEventListener('click', function () { if (confirm('Clear the whole history?')) api('POST', 'History/Clear').then(refreshHistory); });
+
+        // ---------------------------------------------------------------- suggestions from Jellyfin's transcode logs
+        var playbackSug = {}; // data-k -> value that Jellyfin's own transcodes point to (empty until there is enough data)
+        function loadInsights() {
+            return api('GET', 'Insights?days=60').then(function (r) {
+                playbackSug = {};
+                (r.Suggestions || []).forEach(function (x) { playbackSug[x.Key] = x.Value; });
+            }, function () { playbackSug = {}; });
+        }
+
+                // ---------------------------------------------------------------- video encoders (HandBrake & tools tab)
+        function renderEncoders() {
+            var host = $('#hbEncoders');
+            if (!installedEncoders || !installedEncoders.length) { host.innerHTML = '<div class="fieldDescription">Could not read the encoder list (is HandBrake installed?).</div>'; return; }
+            host.innerHTML = installedEncoders.filter(function (n) { return ENC_LABELS[n]; }).map(function (n) {
+                return '<div class="hbRow"><span class="grow"><b>' + esc(ENC_LABELS[n]) + '</b> <small class="fieldDescription">' + esc(n) + '</small></span>' +
+                    '<span class="hbEncMsg fieldDescription" data-for="' + esc(n) + '"></span>' +
+                    '<button type="button" class="raised hbSmall hbEncTest" data-name="' + esc(n) + '">Test</button></div>';
+            }).join('');
+        }
+        function loadEncoders() {
+            return api('GET', 'Encoders').then(function (r) { installedEncoders = r.Encoders || []; }, function () { installedEncoders = null; });
+        }
+        $('#hbEncoders').addEventListener('click', function (e) {
+            var b = e.target.closest('.hbEncTest'); if (!b) return;
+            var name = b.getAttribute('data-name'), msg = $('.hbEncMsg[data-for="' + name + '"]');
+            b.disabled = true; msg.textContent = 'Testing…';
+            api('POST', 'Encoders/Test?name=' + encodeURIComponent(name)).then(function (r) { msg.textContent = (r.Ok ? '✔ ' : '✖ ') + r.Message; },
+                function (x) { errText(x, 'Test failed.').then(function (t) { msg.textContent = '✖ ' + t; }); }).then(function () { b.disabled = false; });
+        });
+
+        function refreshTrash() {
+            api('GET', 'Trash').then(function (list) {
+                var host = $('#hbTrash');
+                if (!list.length) { host.innerHTML = '<div class="fieldDescription">Nothing on hold.</div>'; return; }
+                host.innerHTML = list.map(function (t) {
+                    return '<div class="hbRow" style="flex-wrap:wrap"><span class="grow" title="' + esc(t.OriginalPath) + '"><b>' + esc(t.Name) + '</b> ' + fmtBytes(t.Size) +
+                        '<br><small class="fieldDescription">deleted automatically ' + esc(String(t.Expires).substring(0, 10)) + '</small></span>' +
+                        '<button type="button" class="raised hbSmall hbRestore" data-id="' + esc(t.Id) + '">Restore</button> ' +
+                        '<button type="button" class="raised hbSmall hbPurge" data-id="' + esc(t.Id) + '">Delete now</button></div>';
+                }).join('');
+            });
+        }
+        $('#hbTrash').addEventListener('click', function (e) {
+            var r = e.target.closest('.hbRestore'), d = e.target.closest('.hbPurge');
+            if (r) api('POST', 'Trash/' + r.getAttribute('data-id') + '/Restore').then(refreshTrash, function (x) { errText(x, 'Restore failed.').then(function (t) { alert(t); }); });
+            if (d && confirm('Delete this original permanently?')) api('POST', 'Trash/' + d.getAttribute('data-id') + '/Delete').then(refreshTrash);
+        });
+
+        // ---------------------------------------------------------------- overview / status
+        function refresh() {
+            api('GET', 'Status').then(function (s) {
+                lastStatus = s;
+                var hbLine = s.HandBrakeFound ? ('HandBrake: ' + esc(s.HandBrakeVersion || 'found')) : '<b>HandBrake is not installed</b> (see the HandBrake &amp; tools tab)';
+                $('#hbHbStatus').innerHTML = s.HandBrakeFound
+                    ? '<b>HandBrake is installed</b>: ' + esc(s.HandBrakeVersion || 'version unknown') + '<br><span class="fieldDescription">' + esc(s.HandBrakePath || '') + ' (' + esc(s.HandBrakeSource || '') + ')</span>'
+                    : '<b>HandBrake was not found on this server.</b><br>Install it by running this in a terminal on the server, then press Check again:<br><code>sudo apt install handbrake-cli</code>';
+                $('#hbPauseBtn').firstElementChild.textContent = s.Paused ? 'Continue' : 'Pause';
+                $('#hbPauseNote').textContent = s.Paused ? 'Paused: nothing runs until you press Continue (this survives restarts).' : 'Pause freezes the running encode and keeps anything new from starting.';
+                var line = '<b>' + esc(s.State) + (s.Suspended && !s.Paused ? ' (suspended: streaming)' : '') + '</b> ' + esc(s.Message || '');
+                if (s.CurrentFile) line += '<br>' + esc(s.CurrentFile) + ' — ' + (s.Progress || 0).toFixed(1) + '%' + (s.Eta ? ' ETA ' + esc(s.Eta) : '');
+                $('#hbStatus').innerHTML = line + '<br>' + hbLine;
+                $('#hbBar').style.width = Math.min(100, s.Progress || 0) + '%';
+                $('#hbStats').textContent = 'Converted: ' + s.Converted + ' | Space saved: ' + fmtBytes(s.BytesSaved) + ' | Skipped (not smaller): ' + s.Skipped + ' | Failed (auto): ' + s.Failed + ' | Queued: ' + s.Queued + (s.TrashCount ? ' | Originals on hold: ' + s.TrashCount + ' (' + fmtBytes(s.TrashBytes) + ')' : '');
+                if (activeTab === 'queue') refreshQueue();
+                if (activeTab === 'history') refreshHistory();
+            }, function () { $('#hbStatus').textContent = 'Status unavailable.'; });
+        }
+        $('#hbPauseBtn').addEventListener('click', function () {
+            api('POST', lastStatus && lastStatus.Paused ? 'Resume' : 'Pause').then(refresh);
+        });
+        $('#hbPendingBtn').addEventListener('click', function () {
+            api('GET', 'Pending?limit=100').then(function (list) {
+                var el = $('#hbPending'); el.style.display = 'block';
+                el.textContent = list.length ? list.map(function (x) { return '[' + x.Library + '] ' + x.Path; }).join('\n') : 'Nothing pending. Turn on Auto-process for a library (and save) first.';
+            });
+        });
+        $('#hbResetBtn').addEventListener('click', function () {
+            if (!confirm('Forget which files were auto-converted? They could be converted again.')) return;
+            api('POST', 'ResetState').then(refresh);
+        });
+        $('#hbCheckBtn').addEventListener('click', function () { $('#hbHbStatus').textContent = 'Checking…'; refresh(); loadEncoders().then(renderEncoders); });
+
+        // ---------------------------------------------------------------- load / save
+        var BOOLS = ['SkipIfNotSmaller', 'VerifyDuration', 'Enabled', 'ScheduleEnabled', 'PauseWhileStreaming', 'PausedCountsAsStreaming', 'IgnoreAudioPlayback', 'LowPriority'];
+        function intOf(id, dflt, lo, hi) { var n = parseInt($('#' + id).value, 10); if (isNaN(n)) n = dflt; return Math.min(hi == null ? 1e9 : hi, Math.max(lo == null ? 0 : lo, n)); }
+        function load() {
+            Dashboard.showLoadingMsg();
+            Promise.all([ApiClient.getPluginConfiguration(pluginId), ApiClient.getVirtualFolders(), loadEncoders(), loadInsights()]).then(function (r) {
+                cfg = r[0]; folders = r[1] || [];
+                BOOLS.forEach(function (k) { $('#' + k).checked = !!cfg[k]; });
+                $('#HandBrakePath').value = cfg.HandBrakePath || '';
+                $('#MaxFailures').value = cfg.MaxFailures || 2;
+                $('#MinSavingsPercent').value = cfg.MinSavingsPercent || 0;
+                $('#MinSizeMb').value = cfg.MinSizeMb || 0;
+                $('#KeepReplacedDays').value = cfg.KeepReplacedDays == null ? 7 : cfg.KeepReplacedDays;
+                $('#WindowEndMode').value = cfg.FinishCurrentAfterWindow === false ? 'stop' : 'finish';
+                $('#hbScheduleBody').style.display = cfg.ScheduleEnabled ? 'block' : 'none';
+                $('#MinFreeSpaceGb').value = cfg.MinFreeSpaceGb == null ? 2 : cfg.MinFreeSpaceGb;
+                $('#TrashFolder').value = cfg.TrashFolder || '';
+                renderEncoders();
+                $('#hbDefaults').innerHTML = profileHtml(cfg.Defaults);
+                renderLibraries();
+                fillConvLibs();
+                renderWindows(cfg.Windows || []);
+                renderBlackouts(cfg.Blackouts || []);
+                Dashboard.hideLoadingMsg();
+                refresh();
+            });
+        }
+        function save() {
+            Dashboard.showLoadingMsg();
+            ApiClient.getPluginConfiguration(pluginId).then(function (c) {
+                BOOLS.forEach(function (k) { c[k] = $('#' + k).checked; });
+                c.HandBrakePath = $('#HandBrakePath').value.trim();
+                c.MaxFailures = parseInt($('#MaxFailures').value || '2', 10) || 2;
+                c.MinSavingsPercent = intOf('MinSavingsPercent', 0, 0, 95);
+                c.MinFreeSpaceGb = intOf('MinFreeSpaceGb', 2, 0);
+                c.MinSizeMb = intOf('MinSizeMb', 0, 0);
+                c.KeepReplacedDays = intOf('KeepReplacedDays', 7, 0);
+                c.FinishCurrentAfterWindow = $('#WindowEndMode').value !== 'stop';
+                c.TrashFolder = $('#TrashFolder').value.trim();
+                c.Defaults = readProfile($('#hbDefaults'));
+                c.Libraries = readLibraries();
+                c.Windows = readWindows();
+                c.Blackouts = readBlackouts();
+                return ApiClient.updatePluginConfiguration(pluginId, c);
+            }).then(function (r) { Dashboard.processPluginConfigurationUpdateResult(r); load(); });
+        }
+        $('#HBConvForm').addEventListener('submit', function (e) { e.preventDefault(); save(); return false; });
+        $('#hbAddWin').addEventListener('click', function () { var l = readWindows(); l.push({ Days: [0, 1, 2, 3, 4, 5, 6], Start: '23:00', End: '10:00' }); renderWindows(l); });
+        $('#hbPresetNight').addEventListener('click', function () { renderWindows([{ Days: [0, 1, 2, 3, 4, 5, 6], Start: '23:00', End: '10:00' }]); });
+        $('#hbAddBlackout').addEventListener('click', function () { var l = readBlackouts(); l.push({ From: '', To: '' }); renderBlackouts(l); });
+
+        page.addEventListener('pageshow', function () { load(); clearInterval(timer); timer = setInterval(refresh, 4000); });
+        page.addEventListener('pagehide', function () { clearInterval(timer); });
+    })();
+    </script>
+</div>
+</body>
+</html>
