@@ -1,5 +1,7 @@
 # HandBrake Converter (Jellyfin 12.1 plugin)
 
+Unofficial community plugin, not affiliated with or endorsed by Jellyfin or HandBrake. It does not bundle HandBrake or ffmpeg; it runs the HandBrakeCLI you install yourself (e.g. `sudo apt install handbrake-cli`).
+
 Adds a **HandBrake Converter** entry to the admin dashboard sidebar (like the Reports plugin) with these tabs:
 
 - **Overview**: status, master switch, a HandBrake check (installed? which version?), retry limit, history tools.
