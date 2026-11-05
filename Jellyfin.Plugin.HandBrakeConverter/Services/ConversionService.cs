@@ -481,7 +481,9 @@ public sealed class ConversionService : BackgroundService
         _log.LogInformation("Done {Final} ({Old} -> {New} MB){Held}", p.Final, p.SourceSize / 1048576, outSize / 1048576,
             held != null ? $"; original held until {held.Expires:yyyy-MM-dd}" : string.Empty);
         if (p.Job != null) _jobs.SetStatus(p.Job.Id, "Done");
-        Record(p.Work, "Converted", string.Empty, p.SourceSize, outSize, p.Clock.Elapsed.TotalSeconds);
+        var outcome = !p.Profile.DeleteOriginal ? "original kept, converted copy: " + Path.GetFileName(p.Final)
+            : held != null ? $"original replaced (held {p.KeepDays} days)" : "original replaced";
+        Record(p.Work, "Converted", outcome, p.SourceSize, outSize, p.Clock.Elapsed.TotalSeconds);
         _board.Rest("Idle", "Finished " + Path.GetFileName(p.Final));
 
         try { _library.QueueLibraryScan(); } catch (Exception ex) { _log.LogWarning(ex, "Library scan request failed"); }

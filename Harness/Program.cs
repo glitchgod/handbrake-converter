@@ -571,6 +571,25 @@ Check("API pause sets it", state.Paused && J2(await pctl.Status(CancellationToke
 pctl.Resume();
 string J2(object? o) => JsonSerializer.Serialize((o as ObjectResult)?.Value);
 
+// ---- 19b2) Overview ETA
+BacklogEstimator.CacheSeconds = 0;
+Check("eta: HandBrake's 00h12m05s is read as seconds", BacklogEstimator.ParseEta("00h12m05s") == 725 && BacklogEstimator.ParseEta("") == null && BacklogEstimator.ParseEta("bogus") == null);
+Clear(); history.Clear();
+var etaEp = Add(libC, "Eta Ep"); jobs.Add(new[] { Plain(etaEp) });
+var etaSize = new FileInfo(etaEp.Path!).Length;
+using (var d0 = JsonDocument.Parse(J2(await pctl.Status(CancellationToken.None))))
+    Check("eta: waiting count shows the queued file, no time estimate without history", d0.RootElement.GetProperty("Waiting").GetProperty("Files").GetInt32() == 1 && d0.RootElement.GetProperty("Waiting").GetProperty("Seconds").ValueKind == JsonValueKind.Null);
+history.Add(new HistoryEntry { Title = "old", Result = "Converted", OldBytes = etaSize * 2, NewBytes = etaSize, Seconds = 200 });
+using (var d1 = JsonDocument.Parse(J2(await pctl.Status(CancellationToken.None))))
+{
+    var secs = d1.RootElement.GetProperty("Waiting").GetProperty("Seconds").GetDouble();
+    Check("eta: time = waiting bytes / your usual speed", Math.Abs(secs - 100) < 1);
+}
+
+Clear(); history.Clear();
+using (var d2 = JsonDocument.Parse(J2(await pctl.Status(CancellationToken.None))))
+    Check("eta: nothing waiting shows zero files", d2.RootElement.GetProperty("Waiting").GetProperty("Files").GetInt32() == 0);
+
 // ---- 19c) result checks: tracks, chapters, HDR
 void Env(string k, string? v) => Environment.SetEnvironmentVariable(k, v);
 async Task<(Job Job, Episode Ep)> RunJob(string name, ConversionProfile prof, params (string, string)[] env)
@@ -658,6 +677,10 @@ Env("HB_FAIL", null);
 Check("encoders: a failing encoder is reported", badTest.Contains("\"Ok\":false") && badTest.Contains("boom"));
 Check("encoders: test refuses an encoder HandBrake doesn't list", await pctl.TestEncoder("nvenc_h265", CancellationToken.None) is BadRequestObjectResult && await pctl.TestEncoder("x265;rm", CancellationToken.None) is BadRequestObjectResult);
 Check("encoders: test leaves no files behind", !Directory.Exists(Path.Combine(state.DataDir, "encoder-test")));
+Check("encoders: last result is saved (x265 failed last)", caps.Results().TryGetValue("x265", out var savedX) && !savedX.Ok && savedX.Message.Contains("boom"));
+Check("encoders: refused names are not recorded", !caps.Results().ContainsKey("nvenc_h265") && !caps.Results().ContainsKey("x265;rm"));
+Check("encoders: results survive a restart", new HandBrakeCapabilities(new FakeEncoder(fakeProbe), state, NullLogger<HandBrakeCapabilities>.Instance).Results().ContainsKey("x265"));
+Check("encoders: API returns the saved tests", JsonSerializer.Serialize((await pctl.Encoders(CancellationToken.None) as ObjectResult)?.Value).Contains("\"Tests\"") );
 
 // ---- 19g) ffprobe JSON parsing
 var mi = MediaProbe.Parse("{\"streams\":[{\"codec_type\":\"video\",\"codec_name\":\"mjpeg\",\"disposition\":{\"attached_pic\":1}},{\"codec_type\":\"video\",\"codec_name\":\"hevc\",\"pix_fmt\":\"yuv420p10le\",\"color_transfer\":\"smpte2084\",\"side_data_list\":[{\"side_data_type\":\"DOVI configuration record\"}]},{\"codec_type\":\"audio\"},{\"codec_type\":\"audio\"},{\"codec_type\":\"subtitle\"}],\"chapters\":[{},{}],\"format\":{\"duration\":\"61.5\"}}")!;

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -14,8 +15,15 @@ namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 
 /// <summary>
 /// Asks the installed HandBrake which video encoders it can use here (HandBrake only lists NVENC/QSV when it finds the hardware),
-/// and can prove one works with a 2-second sample encode.
+/// and can prove one works with a 2-second sample encode (Encoder test tab).
 /// </summary>
+public class EncoderTestResult
+{
+    public bool Ok { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public DateTime Time { get; set; } = DateTime.Now;
+}
+
 public class HandBrakeCapabilities
 {
     private static readonly Regex Name = new("^[A-Za-z0-9_]+$", RegexOptions.Compiled);
@@ -24,12 +32,42 @@ public class HandBrakeCapabilities
     private readonly StateStore _state;
     private readonly ILogger<HandBrakeCapabilities> _log;
     private readonly ConcurrentDictionary<string, IReadOnlyList<string>> _cache = new();
+    private readonly string _resultsFile;
+    private readonly object _lock = new();
+    private Dictionary<string, EncoderTestResult> _results = new();
 
     public HandBrakeCapabilities(IMediaEncoder encoder, StateStore state, ILogger<HandBrakeCapabilities> log)
     {
         _encoder = encoder;
         _state = state;
         _log = log;
+        _resultsFile = Path.Combine(state.DataDir, "encoder-tests.json");
+        try
+        {
+            if (File.Exists(_resultsFile)) _results = JsonSerializer.Deserialize<Dictionary<string, EncoderTestResult>>(File.ReadAllText(_resultsFile)) ?? new();
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Could not read saved encoder test results; starting empty"); }
+    }
+
+    /// <summary>The saved result of the last test of each encoder (encoders never tested are absent).</summary>
+    public Dictionary<string, EncoderTestResult> Results()
+    {
+        lock (_lock) return new Dictionary<string, EncoderTestResult>(_results);
+    }
+
+    private void Remember(string encoder, bool ok, string message)
+    {
+        lock (_lock)
+        {
+            _results[encoder] = new EncoderTestResult { Ok = ok, Message = message, Time = DateTime.Now };
+            try
+            {
+                var tmp = _resultsFile + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(_results));
+                File.Move(tmp, _resultsFile, true);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not save encoder test results"); }
+        }
     }
 
     /// <summary>Encoder names HandBrake lists for this machine; empty if they could not be read.</summary>
@@ -61,7 +99,7 @@ public class HandBrakeCapabilities
         return names;
     }
 
-    /// <summary>Encodes a 2-second generated clip with <paramref name="encoder"/>. Used by the "Test" button on the HandBrake & tools tab.</summary>
+    /// <summary>Encodes a 2-second generated clip with <paramref name="encoder"/>. Used by the Test buttons on the Encoder test tab.</summary>
     public async Task<(bool Ok, string Message)> TestAsync(HandBrakeLocator.Launcher launcher, string encoder, CancellationToken ct)
     {
         if (!Name.IsMatch(encoder)) return (false, "Unknown encoder name.");
@@ -82,9 +120,16 @@ public class HandBrakeCapabilities
             var sw = Stopwatch.StartNew();
             var (code, text) = await RunAsync(launcher, new[] { "-i", input, "-o", output, "-f", "av_mkv", "-e", encoder, "-q", "28" }, TimeSpan.FromSeconds(90), ct).ConfigureAwait(false);
             if (code == 0 && File.Exists(output) && new FileInfo(output).Length > 1000)
-                return (true, $"Works ({sw.Elapsed.TotalSeconds:0.0} s for a 2-second sample).");
+            {
+                var good = $"Works ({sw.Elapsed.TotalSeconds:0.0} s for a 2-second sample).";
+                Remember(encoder, true, good);
+                return (true, good);
+            }
+
             _log.LogWarning("Encoder test for {Encoder} failed (exit {Code}): {Text}", encoder, code, Tail(text));
-            return (false, $"Failed (exit {code}): {Tail(text)}");
+            var bad = $"Failed (exit {code}): {Tail(text)}";
+            Remember(encoder, false, bad);
+            return (false, bad);
         }
         finally
         {
@@ -107,11 +152,11 @@ public class HandBrakeCapabilities
     private static string Tail(string text) =>
         string.Join(" | ", text.Replace("\r", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries).TakeLast(3)).Trim();
 
-    private static Task<(int Code, string Output)> RunAsync(HandBrakeLocator.Launcher l, IEnumerable<string> args, TimeSpan limit, CancellationToken ct) =>
-        RunAsync(l.FileName, l.PrefixArgs.Concat(args), l.Env, limit, ct);
-
     private static Task<(int Code, string Output)> RunAsync(string exe, IEnumerable<string> args, TimeSpan limit, CancellationToken ct) =>
         RunAsync(exe, args, new Dictionary<string, string>(), limit, ct);
+
+    private static Task<(int Code, string Output)> RunAsync(HandBrakeLocator.Launcher l, IEnumerable<string> args, TimeSpan limit, CancellationToken ct) =>
+        RunAsync(l.FileName, l.PrefixArgs.Concat(args), l.Env, limit, ct);
 
     private static async Task<(int Code, string Output)> RunAsync(string exe, IEnumerable<string> args, IReadOnlyDictionary<string, string> env, TimeSpan limit, CancellationToken ct)
     {

@@ -48,6 +48,7 @@ public class HandBrakeConverterController : ControllerBase
     private readonly JobStore _jobs;
     private readonly TrashStore _trash;
     private readonly ILibraryManager _library;
+    private readonly BacklogEstimator _eta;
 
     public HandBrakeConverterController(
         ConversionService service,
@@ -71,6 +72,7 @@ public class HandBrakeConverterController : ControllerBase
         _jobs = jobs;
         _trash = trash;
         _library = library;
+        _eta = new BacklogEstimator(backlog, jobs, history);
     }
 
     [HttpGet("Status")]
@@ -91,6 +93,7 @@ public class HandBrakeConverterController : ControllerBase
 
         var (converted, saved, failed) = _state.Stats();
         var snap = _service.Snapshot();
+        var waiting = _eta.Get(cfg, snap.CurrentFile);
         return Ok(new
         {
             snap.State,
@@ -99,6 +102,8 @@ public class HandBrakeConverterController : ControllerBase
             snap.CurrentJobId,
             snap.Progress,
             snap.Eta,
+            EtaSeconds = BacklogEstimator.ParseEta(snap.Eta),
+            Waiting = new { waiting.Files, waiting.Bytes, waiting.Seconds },
             snap.Suspended,
             Paused = snap.UserPaused,
             HandBrakeFound = launcher != null,
@@ -259,8 +264,8 @@ public class HandBrakeConverterController : ControllerBase
     public async Task<ActionResult> Encoders(CancellationToken ct)
     {
         var launcher = _locator.Resolve(Plugin.Instance!.Configuration.HandBrakePath);
-        if (launcher == null) return Ok(new { Encoders = Array.Empty<string>() });
-        return Ok(new { Encoders = await _caps.EncodersAsync(launcher, ct).ConfigureAwait(false) });
+        if (launcher == null) return Ok(new { Encoders = Array.Empty<string>(), Tests = _caps.Results() });
+        return Ok(new { Encoders = await _caps.EncodersAsync(launcher, ct).ConfigureAwait(false), Tests = _caps.Results() });
     }
 
     /// <summary>Makes a 2-second sample encode with one encoder to prove it works here.</summary>

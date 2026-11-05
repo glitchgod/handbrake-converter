@@ -1,1 +1,1 @@
-Catalog test
+Encoder test tab with test all, not-supported marks and a first-run notice. Overview ETA. Layout restyled like Jellyfin's own dashboard pages.

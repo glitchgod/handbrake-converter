@@ -37,7 +37,7 @@ window.ApiClient = {
     window.__calls.push([o.type, o.url, body]);
     const u = o.url;
     const ok = (j) => j;
-    if (u.endsWith('/Status')) return ok({State:'Idle', Message:'Nothing to convert.', CurrentFile:'', CurrentJobId:'', Progress:0, Eta:'', Suspended:false, Paused:!!window.__paused, HandBrakeFound:true, HandBrakeSource:'installed on this server', HandBrakePath:'/usr/bin/HandBrakeCLI', HandBrakeVersion:'HandBrake 1.9.2', Converted:3, BytesSaved:5368709120, Skipped:2, TrashCount:1, TrashBytes:2147483648, Failed:0, Queued: window.__jobs.length});
+    if (u.endsWith('/Status')) return ok({State:'Idle', Message:'Nothing to convert.', CurrentFile: window.__cur || '', CurrentJobId:'', Progress: window.__cur ? 42.5 : 0, Eta:'', EtaSeconds: window.__etaSeconds == null ? null : window.__etaSeconds, Waiting: window.__waiting || {Files:0, Bytes:0, Seconds:null}, Suspended:false, Paused:!!window.__paused, HandBrakeFound:true, HandBrakeSource:'installed on this server', HandBrakePath:'/usr/bin/HandBrakeCLI', HandBrakeVersion:'HandBrake 1.9.2', Converted:3, BytesSaved:5368709120, Skipped:2, TrashCount:1, TrashBytes:2147483648, Failed:0, Queued: window.__jobs.length});
     if (u.includes('/Browse?')) {
       if (u.includes('libraryId=bbbb')) return ok([{Id:'11111111111111111111111111111111', Name:'Cowboy Bebop', Kind:'Series', Year:1998, Index:null}]);
       if (u.includes('parentId=1111')) return ok([{Id:'22222222222222222222222222222222', Name:'Season 1', Kind:'Season', Year:null, Index:1}]);
@@ -47,8 +47,8 @@ window.ApiClient = {
     if (u.endsWith('/Queue') && o.type === 'POST') { window.__jobs.push({Id:'j'+window.__jobs.length, Title:'Asteroid Blues', Path:'/m/x.mkv', Status:'Queued', Error:'', IgnoreSchedule:body.IgnoreSchedule, DeleteOriginal:body.Profile.DeleteOriginal, Encoder:body.Profile.HandBrake.Encoder, Subtitles:body.Profile.HandBrake.SubtitleMode, MaxHeight:body.Profile.HandBrake.MaxHeight}); return ok({Added:body.ItemIds.length, AlreadyQueued:0, NothingFound:0}); }
     if (u.endsWith('/Queue')) return ok(window.__jobs);
     if (u.includes('/Insights')) return ok(window.__ins);
-    if (u.endsWith('/Encoders')) return ok({Encoders:['x264','x265','x265_10bit','svt_av1']});
-    if (u.includes('/Encoders/Test')) return ok({Ok: !u.includes('x264'), Message: u.includes('x264') ? 'Failed (exit 3): boom' : 'Works (0.4 s for a 2-second sample).'});
+    if (u.includes('/Encoders/Test')) { const n = u.split('name=')[1]; const r = {Ok: n !== 'x264', Message: n === 'x264' ? 'Failed (exit 3): boom' : 'Works (0.4 s for a 2-second sample).'}; window.__tests = window.__tests || {}; window.__tests[n] = r; return ok(r); }
+    if (u.endsWith('/Encoders')) return ok({Encoders:['x264','x265','x265_10bit','svt_av1'], Tests: window.__tests || {}});
     if (u.endsWith('/History') && o.type === 'GET') return ok(window.__hist);
     if (u.endsWith('/History/Clear')) { window.__hist = []; return ok({Ok:true}); }
     if (u.includes('/History/') && u.endsWith('/Retry')) return ok({Ok:true});
@@ -141,6 +141,9 @@ with sync_playwright() as p:
     check("options prefilled with Anime custom (burn + 720)", pg.input_value("#hbConvProfile [data-k='hb.SubtitleMode']") == "burn" and pg.input_value("#hbConvProfile [data-k='hb.MaxHeight']") == "720")
     check("burn group visible in options", pg.locator("#hbConvProfile .hbBurn").is_visible())
     pg.select_option("#hbConvProfile [data-k='hb.MaxHeight']", "480")
+    check("burn track number hidden until its box is ticked", not pg.locator("#hbConvProfile [data-k='hb.BurnTrack']").is_visible() and pg.locator("#hbConvProfile .hbBurnLang").is_visible())
+    pg.locator("#hbConvProfile .hbBurn .hbTog").check()
+    check("ticking shows the track number (default 1) and hides the language", pg.input_value("#hbConvProfile [data-k='hb.BurnTrack']") == "1" and not pg.locator("#hbConvProfile .hbBurnLang").is_visible())
     pg.fill("#hbConvProfile [data-k='hb.BurnTrack']", "3")
     pg.select_option("#hbConvProfile [data-k='p.DeleteOriginal']", "replace")
     pg.check("#hbRunNow")
@@ -252,15 +255,48 @@ with sync_playwright() as p:
     check("saved: HDR mode", hsaved["Defaults"]["HandBrake"]["HdrMode"] == "keep")
     pg.locator("#hbDefaults [data-k='hb.HdrMode']").select_option("skip")
 
-    # --- HandBrake & tools: encoder list + test buttons
-    pg.click(".hbTabBtn[data-tab=tools]")
+    # --- Encoder test tab: notice, list, test buttons, test all
+    pg.click(".hbTabBtn[data-tab=overview]")
+    pg.evaluate("window.__cur = '/m/Heat.mkv'; window.__etaSeconds = 725; window.__waiting = {Files: 42, Bytes: 407000000000, Seconds: 90000}")
+    pg.wait_for_function("document.querySelector('#hbWaiting').textContent.includes('42 files')", timeout=9000)
+    st = pg.inner_text("#hbStatus"); wt = pg.inner_text("#hbWaiting")
+    check("overview: this file shows time left and a clock time", "about 12 min left (done around" in st)
+    check("overview: waiting files, size and total time", "Waiting: 42 files (379" in wt and "about 1 d 1 h" in wt and "all done around" in wt)
+    pg.evaluate("window.__waiting = {Files: 3, Bytes: 3000000000, Seconds: null}; window.__etaSeconds = null")
+    pg.wait_for_function("document.querySelector('#hbWaiting').textContent.includes('3 files')", timeout=9000)
+    check("overview: no history yet says the estimate comes later", "appears after a few finished conversions" in pg.inner_text("#hbWaiting"))
+    pg.evaluate("window.__cur = null; window.__waiting = null")
+    pg.wait_for_function("document.querySelector('#hbWaiting').textContent === ''", timeout=9000)
+    check("notice: asks for the encoder test while none has been run", pg.locator(".hbTab[data-tab=overview] .hbEncNotice").is_visible())
+    pg.click(".hbTab[data-tab=overview] .hbGoEncTest")
+    check("notice button opens the Encoder test tab", pg.locator(".hbTab[data-tab=encoders]").is_visible())
+    check("button starts as Test all encoders", pg.inner_text("#hbEncAll") == "Test all encoders")
+    pg.click(".hbTabBtn[data-tab=defaults]")
+    check("default settings dropdown: nothing marked before testing", "not supported" not in pg.inner_text("#hbDefaults [data-k='hb.Encoder']"))
+    pg.click(".hbTabBtn[data-tab=encoders]")
+    check("encoder tab: save bar hidden", not pg.locator("#hbSaveBar").is_visible())
     check("tools: lists the installed encoders", pg.locator("#hbEncoders .hbEncTest").count() == 4 and "x265 10-bit" in pg.inner_text("#hbEncoders"))
+
     pg.locator("#hbEncoders .hbEncTest[data-name=x265]").click()
     pg.wait_for_function("document.querySelector('.hbEncMsg[data-for=x265]').textContent.includes('Works')")
     check("tools: Test reports success", "✔" in pg.inner_text(".hbEncMsg[data-for=x265]"))
     pg.locator("#hbEncoders .hbEncTest[data-name=x264]").click()
     pg.wait_for_function("document.querySelector('.hbEncMsg[data-for=x264]').textContent.includes('boom')")
     check("tools: Test reports failure", "✖" in pg.inner_text(".hbEncMsg[data-for=x264]"))
+    check("notice gone once a test has run", not pg.locator(".hbEncNotice").first.is_visible() and pg.inner_text("#hbEncAll") == "Retest all")
+    pg.evaluate("window.__tests = {}")
+    pg.click("#hbEncAll")
+    pg.wait_for_function("document.querySelector('#hbEncAllMsg').textContent.startsWith('Done')")
+    order = [c[1].split('name=')[1] for c in pg.evaluate("window.__calls") if "Encoders/Test" in c[1]][-4:]
+    check("Test all runs every encoder, one after another", order == ["x264", "x265", "x265_10bit", "svt_av1"])
+    check("Test all summary counts the failures", "1 not supported" in pg.inner_text("#hbEncAllMsg"))
+    check("Retest all keeps its name", pg.inner_text("#hbEncAll") == "Retest all")
+    pg.click(".hbTabBtn[data-tab=defaults]")
+    opts = {o.get_attribute("value"): o.inner_text() for o in pg.locator("#hbDefaults [data-k='hb.Encoder'] option").all()}
+    check("a failed encoder is never shown as suggested", "suggested" not in opts["x264"])
+    check("dropdown marks only the encoder that failed", "- not supported" in opts["x264"] and all("not supported" not in v for k, v in opts.items() if k != "x264"))
+    pg.click(".hbTabBtn[data-tab=encoders]")
+    check("encoder tab explains what Test does", "2-second sample video" in pg.inner_text(".hbTab[data-tab=encoders]"))
 
     # --- Original files tab (held originals + safety checks)
     pg.click(".hbTabBtn[data-tab=originals]")
@@ -271,8 +307,17 @@ with sync_playwright() as p:
     pg.wait_for_function("document.querySelector('#hbTrash').textContent.includes('Nothing on hold')")
     check("restore posted", any(c[0] == "POST" and c[1].endswith("/Trash/t1/Restore") for c in pg.evaluate("window.__calls")))
     check("safety defaults loaded (verify duration + only-if-smaller on, 2 GB spare, 7 days)", pg.is_checked("#VerifyDuration") and pg.is_checked("#SkipIfNotSmaller") and pg.input_value("#MinFreeSpaceGb") == "2" and pg.input_value("#KeepReplacedDays") == "7")
+    check("toggles: on where the saved number is >0, off (hidden) where it is 0", pg.locator("#KeepReplacedDays").is_visible() and pg.locator("#MinFreeSpaceGb").is_visible() and not pg.locator("#MinSizeMb").is_visible() and not pg.locator("#MinSavingsPercent").is_visible())
+    pg.locator("#MinSizeMb").evaluate("e => e.closest('.hbTogWrap').querySelector('.hbTog').click()")
+    check("ticking 'skip small files' reveals the box with a default of 100", pg.locator("#MinSizeMb").is_visible() and pg.input_value("#MinSizeMb") == "100")
+    pg.locator("#MinSavingsPercent").evaluate("e => e.closest('.hbTogWrap').querySelector('.hbTog').click()")
+    check("minimum saving defaults to 10", pg.input_value("#MinSavingsPercent") == "10")
     pg.fill("#MinFreeSpaceGb", "10"); pg.fill("#MinSavingsPercent", "15"); pg.fill("#TrashFolder", "/mnt/hold"); pg.fill("#KeepReplacedDays", "14"); pg.fill("#MinSizeMb", "50")
     pg.uncheck("#VerifyDuration")
+    pg.locator("#KeepReplacedDays").evaluate("e => e.closest('.hbTogWrap').querySelector('.hbTog').click()")
+    check("unticking 'keep replaced originals' hides the box and saves 0", not pg.locator("#KeepReplacedDays").is_visible() and pg.input_value("#KeepReplacedDays") == "0")
+    pg.locator("#KeepReplacedDays").evaluate("e => e.closest('.hbTogWrap').querySelector('.hbTog').click()")
+    pg.fill("#KeepReplacedDays", "14")
     pg.screenshot(path="/tmp/page_originals.png", full_page=True)
 
     # --- Schedule tab + install
@@ -324,7 +369,7 @@ with sync_playwright() as p:
     missing = pg.evaluate("""() => {
       const out = [];
       document.querySelectorAll('#HBConvPage input[is=emby-input], #HBConvPage select[is=emby-select], #HBConvPage input[is=emby-checkbox]').forEach(el => {
-        if (el.classList.contains('hbDay') || el.classList.contains('hbPick') || el.classList.contains('hbJobPick') || el.id === 'hbSelAll') return;
+        if (el.classList.contains('hbDay') || el.classList.contains('hbPick') || el.classList.contains('hbJobPick') || el.id === 'hbSelAll' || el.closest('.hbTogBody')) return;
         const box = el.closest('.inputContainer, .selectContainer, .checkboxContainer');
         if (!box || !box.querySelector('.fieldDescription')) out.push(el.id || el.getAttribute('data-k') || el.className);
       });
@@ -333,9 +378,9 @@ with sync_playwright() as p:
     check("every option has a description sentence", not missing)
     if missing: print("  missing:", missing)
     pg.click(".hbTabBtn[data-tab=convert]"); pg.select_option("#hbConvLib", "bbbb2222bbbb2222bbbb2222bbbb2222"); pg.click("#hbConvGo"); pg.wait_for_selector(".hbPick"); pg.locator(".hbPick").nth(0).check(); pg.click("#hbConvSel")
-    missing2 = pg.evaluate("""() => { const out=[]; document.querySelectorAll('#hbConvProfile input[is=emby-input], #hbConvProfile select[is=emby-select], #hbConvProfile input[is=emby-checkbox]').forEach(el => { const b = el.closest('.inputContainer, .selectContainer, .checkboxContainer'); if (!b || !b.querySelector('.fieldDescription')) out.push(el.getAttribute('data-k')); }); return out; }""")
+    missing2 = pg.evaluate("""() => { const out=[]; document.querySelectorAll('#hbConvProfile input[is=emby-input], #hbConvProfile select[is=emby-select], #hbConvProfile input[is=emby-checkbox]').forEach(el => { if (el.closest('.hbTogBody')) return; const b = el.closest('.inputContainer, .selectContainer, .checkboxContainer'); if (!b || !b.querySelector('.fieldDescription')) out.push(el.getAttribute('data-k')); }); return out; }""")
     check("manual-convert dialog options all described", not missing2)
-    for t in ["libraries", "convert", "queue", "history", "defaults", "originals", "schedule", "tools"]:
+    for t in ["libraries", "convert", "queue", "history", "defaults", "originals", "schedule", "tools", "encoders"]:
         first = pg.evaluate("(t) => { const e = document.querySelector('.hbTab[data-tab=' + t + '] > .fieldDescription'); return e ? e.textContent.length : 0; }", t)
         check("tab intro present: " + t, first > 60)
 

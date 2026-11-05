@@ -7,11 +7,21 @@
 <body>
 <div id="HBConvPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-select,emby-checkbox">
     <style>
-        #HBConvPage .hbTabs { display:flex; flex-wrap:wrap; gap:.2em; margin:.6em 0 1.4em; border-bottom:1px solid rgba(128,128,128,.35); }
-        #HBConvPage .hbTabBtn { background:none; border:none; color:inherit; font:inherit; padding:.6em 1em; cursor:pointer; border-bottom:3px solid transparent; opacity:.7; }
-        #HBConvPage .hbTabBtn.active { border-bottom-color:#00a4dc; opacity:1; }
-        #HBConvPage .hbBox { border:1px solid rgba(128,128,128,.35); border-radius:.4em; padding:1em; margin:.8em 0; }
-        #HBConvPage .hbRow { display:flex; align-items:center; flex-wrap:wrap; gap:.6em; padding:.3em .2em; border-bottom:1px solid rgba(128,128,128,.18); }
+        /* Layout follows Jellyfin's own dashboard pages (Users > Profile / Access, Playback): big light title, text tabs with a blue underline,
+           large light section headings, filled panels around groups of checkboxes, full-width blue Save. */
+        #HBConvPage .hbPageTitle { font-size:2.1em; font-weight:400; margin:.2em 0 .5em; }
+        #HBConvPage .hbTabs { display:flex; flex-wrap:wrap; margin:0 0 1.6em; }
+        #HBConvPage .hbTabBtn { background:none; border:none; color:inherit; font:inherit; padding:1em 1.3em; cursor:pointer; border-bottom:3px solid transparent; }
+        #HBConvPage .hbTabBtn:hover { background:rgba(128,128,128,.12); }
+        #HBConvPage .hbTabBtn.active { color:#00a4dc; border-bottom-color:#00a4dc; }
+        #HBConvPage .hbTab > .fieldDescription:first-child { color:#00a4dc; font-weight:500; font-size:1.05em; margin-bottom:1.4em; }
+        #HBConvPage .verticalSection { margin-bottom:2em; }
+        #HBConvPage .sectionTitle { font-size:1.7em; font-weight:400; margin:1.2em 0 .5em; }
+        #HBConvPage .inputContainer, #HBConvPage .selectContainer { margin-bottom:1.5em; }
+        #HBConvPage .hbPanel { background:rgba(128,128,128,.12); border-radius:.4em; padding:.8em 1.2em .3em; margin:.6em 0 1.4em; }
+        #HBConvPage .hbNotice { border-left:.35em solid #00a4dc; }
+        #HBConvPage .hbBox { background:rgba(128,128,128,.12); border-radius:.4em; padding:1.1em 1.3em; margin:.8em 0; }
+        #HBConvPage .hbRow { display:flex; align-items:center; flex-wrap:wrap; gap:.6em; padding:.6em .9em; margin:.35em 0; background:rgba(128,128,128,.10); border-radius:.4em; }
         #HBConvPage .hbRow .grow { flex:1; min-width:0; }
         #HBConvPage #hbQueueTools { display:flex; align-items:center; flex-wrap:wrap; gap:.8em; margin:.6em 0; }
         #HBConvPage .hbBadge { font-size:.8em; padding:.1em .6em; border-radius:10px; background:rgba(128,128,128,.3); }
@@ -25,6 +35,7 @@
     <div data-role="content">
         <div class="content-primary">
             <form id="HBConvForm">
+            <h1 class="hbPageTitle">HandBrake Converter</h1>
             <div class="hbTabs" id="hbTabs">
                 <button type="button" class="hbTabBtn active" data-tab="overview">Overview</button>
                 <button type="button" class="hbTabBtn" data-tab="libraries">Libraries (auto-convert)</button>
@@ -35,20 +46,25 @@
                 <button type="button" class="hbTabBtn" data-tab="originals">Original files</button>
                 <button type="button" class="hbTabBtn" data-tab="schedule">Schedule &amp; performance</button>
                 <button type="button" class="hbTabBtn" data-tab="tools">HandBrake &amp; tools</button>
+                <button type="button" class="hbTabBtn" data-tab="encoders">Encoder test</button>
             </div>
 
             <!-- ============ OVERVIEW ============ -->
             <div class="hbTab" data-tab="overview">
+                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Go to Encoder test</span></button></div>
                 <div class="hbBox">
                     <div id="hbStatus">Loading…</div>
                     <div class="hbBar"><div id="hbBar"></div></div>
+                    <div id="hbWaiting" class="fieldDescription"></div>
                     <div id="hbStats" class="fieldDescription"></div>
                     <button is="emby-button" type="button" class="raised" id="hbPauseBtn"><span>Pause</span></button>
                     <span id="hbPauseNote" class="fieldDescription"></span>
                 </div>
+                <div class="hbPanel">
                 <div class="checkboxContainer checkboxContainer-withDescription">
                     <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="Enabled" /><span>Enable HandBrake Converter</span></label>
                     <div class="fieldDescription checkboxFieldDescription">Master switch. When off, nothing converts: neither Auto-convert (Libraries tab) nor the Queue (Manual convert tab).</div>
+                </div>
                 </div>
             </div>
 
@@ -137,6 +153,7 @@
             <!-- ============ DEFAULT SETTINGS ============ -->
             <div class="hbTab" data-tab="defaults" style="display:none">
                 <div class="fieldDescription">The conversion settings every library uses unless it has its own, and the starting point for Manual convert. Choose quality, audio, subtitles, file format and what happens to the original.</div>
+                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Go to Encoder test</span></button></div>
                 <div id="hbDefaults"></div>
             </div>
 
@@ -146,43 +163,73 @@
 
                 <div class="verticalSection">
                     <h2 class="sectionTitle">1. Before converting</h2>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MinSizeMb">Auto-convert: skip files smaller than (MB)</label>
-                        <input is="emby-input" type="number" id="MinSizeMb" min="0" />
-                        <div class="fieldDescription">0 = convert files of any size. Handy for ignoring tiny clips and samples.</div>
+                    <div class="hbTogWrap">
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="100" /><span>Auto-convert: skip small files</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">Handy for ignoring tiny clips and samples.</div>
+                        </div>
+                        <div class="hbTogBody hbSub" style="display:none">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="MinSizeMb">Skip files smaller than (MB)</label>
+                                <input is="emby-input" type="number" id="MinSizeMb" min="0" />
+                            </div>
+                        </div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Keep at least this much free disk space (GB)</label>
-                        <input is="emby-input" type="number" id="MinFreeSpaceGb" min="0" />
-                        <div class="fieldDescription">A conversion only starts if the disk has room for the new file plus this much spare. Otherwise it waits.</div>
+                    <div class="hbTogWrap">
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="2" /><span>Keep some disk space free</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">A conversion only starts if the disk has room for the new file plus the spare space below. Otherwise it waits.</div>
+                        </div>
+                        <div class="hbTogBody hbSub" style="display:none">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="MinFreeSpaceGb">Keep at least this much free (GB)</label>
+                                <input is="emby-input" type="number" id="MinFreeSpaceGb" min="0" />
+                            </div>
+                        </div>
                     </div>
                 </div>
 
                 <div class="verticalSection">
                     <h2 class="sectionTitle">2. After converting: checks before anything is replaced</h2>
                     <div class="fieldDescription">A converted file that fails a check is thrown away and the original is left exactly as it was.</div>
+                    <div class="hbPanel">
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="SkipIfNotSmaller" /><span>Only accept the converted file if it is smaller than the original</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Skipped for manual conversions that keep the original or burn in subtitles, since those are deliberate.</div>
                     </div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="MinSavingsPercent">…and it must be at least this much smaller (%)</label>
-                        <input is="emby-input" type="number" id="MinSavingsPercent" min="0" max="95" />
-                        <div class="fieldDescription">Example: 20 means a 10 GB original is only replaced if the result is 8 GB or less. A result that saves less is discarded and the original kept. 0 = any saving is enough.</div>
+                    <div class="hbTogWrap" id="hbSavingsWrap">
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="10" /><span>…and require a minimum saving</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">Example: 20% means a 10 GB original is only replaced if the result is 8 GB or less. A result that saves less is discarded and the original kept.</div>
+                        </div>
+                        <div class="hbTogBody hbSub" style="display:none">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="MinSavingsPercent">It must be at least this much smaller (%)</label>
+                                <input is="emby-input" type="number" id="MinSavingsPercent" min="0" max="95" />
+                            </div>
+                        </div>
                     </div>
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="VerifyDuration" /><span>Check the converted file before the original is replaced</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Compares the length, audio tracks, subtitle tracks, chapters and (when kept) HDR with the original, and throws the result away if anything is missing. Uses the ffprobe that comes with Jellyfin.</div>
+                    </div>
                     </div>
                 </div>
 
                 <div class="verticalSection">
                     <h2 class="sectionTitle">3. Replaced originals</h2>
                     <div class="fieldDescription">When a library is set to <b>Replace original</b>, the old file is <b>moved</b> (not copied) into a hidden folder instead of being deleted, so you can undo a bad conversion. By default that folder is <code>.hb-originals</code> inside the same library folder, on the same drive as the video: the move is instant and writes nothing to your system disk, and Jellyfin skips the folder.</div>
-                    <div class="inputContainer">
-                        <label class="inputLabel inputLabelUnfocused" for="KeepReplacedDays">Keep replaced originals for (days)</label>
-                        <input is="emby-input" type="number" id="KeepReplacedDays" min="0" />
-                        <div class="fieldDescription">After this many days they are deleted automatically. 0 = delete right away (no undo).</div>
+                    <div class="hbTogWrap">
+                        <div class="checkboxContainer checkboxContainer-withDescription">
+                            <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="7" /><span>Keep replaced originals so you can undo</span></label>
+                            <div class="fieldDescription checkboxFieldDescription">Off = the old file is deleted right away (no undo). On = it is held, then deleted automatically after the number of days below.</div>
+                        </div>
+                        <div class="hbTogBody hbSub" style="display:none">
+                            <div class="inputContainer">
+                                <label class="inputLabel inputLabelUnfocused" for="KeepReplacedDays">Keep them for (days)</label>
+                                <input is="emby-input" type="number" id="KeepReplacedDays" min="0" />
+                            </div>
+                        </div>
                     </div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="TrashFolder">Holding folder (optional, leave blank for the automatic one)</label>
@@ -230,6 +277,7 @@
                 <div class="verticalSection">
                     <h2 class="sectionTitle">While converting</h2>
                     <div class="fieldDescription">How conversions behave while they are running, so they don't get in the way of watching.</div>
+                    <div class="hbPanel">
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="PauseWhileStreaming" /><span>Pause while someone is watching</span></label>
                         <div class="fieldDescription checkboxFieldDescription">The conversion freezes while anyone is playing something in Jellyfin and carries on when they stop. A file is never swapped while someone is watching that exact title.</div>
@@ -246,6 +294,23 @@
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="LowPriority" /><span>Run in the background at low priority</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Gives other programs on the server (including Jellyfin streaming) first call on the CPU, so the server stays responsive. Conversions take a little longer when the server is busy. Recommended.</div>
                     </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ============ ENCODER TEST ============ -->
+            <div class="hbTab" data-tab="encoders" style="display:none">
+                <div class="fieldDescription">Optional. Shows the video encoders this HandBrake can use on this server, and lets you check that one really works before you pick it in Default settings. You never need this for the usual software encoders (x264, x265); it is mainly for hardware encoders.</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Video encoders</h2>
+                    <div class="fieldDescription">Hardware encoders (NVENC for NVIDIA, QSV for Intel) only appear here when HandBrake finds the hardware. HandBrake can list one even when its driver is broken, which is what the test is for.</div>
+                    <div style="margin:.6em 0;"><button is="emby-button" type="button" class="raised" id="hbEncAll"><span>Test all encoders</span></button> <span id="hbEncAllMsg" class="fieldDescription"></span></div>
+                    <div class="fieldDescription">Test all runs the test on every encoder below, one after another. Once results exist the button becomes Retest all. Encoders that fail are marked "- not supported" in the Encoder dropdown (Default settings, a library's own settings, Manual convert); encoders that work, or were never tested, are left unmarked.</div>
+                    <div id="hbEncoders">Checking…</div>
+                </div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">What Test does</h2>
+                    <div class="fieldDescription">Test makes a 2-second sample video, converts it with that encoder, and tells you if it worked or why it failed. It takes a few seconds, does not touch your library or any of your files, and deletes the sample afterwards.</div>
                 </div>
             </div>
 
@@ -260,12 +325,6 @@
                     <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="HandBrakePath">HandBrakeCLI location (optional full path)</label>
                         <input is="emby-input" type="text" id="HandBrakePath" />
                         <div class="fieldDescription">Only needed if HandBrakeCLI is installed somewhere unusual. Leave blank and the plugin finds it by itself. Press Save before checking again if you change this.</div></div>
-                </div>
-
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">Video encoders</h2>
-                    <div class="fieldDescription">The video encoders this HandBrake can use on this server. Hardware encoders (NVENC for NVIDIA, QSV for Intel) only appear when HandBrake finds the hardware. Test makes a 2-second sample encode to prove one really works.</div>
-                    <div id="hbEncoders">Checking…</div>
                 </div>
 
                 <div class="verticalSection">
@@ -311,18 +370,22 @@
             qsv_h265: 'QSV H.265 (Intel)', qsv_h265_10bit: 'QSV H.265 10-bit (Intel)', qsv_h264: 'QSV H.264 (Intel)', qsv_av1: 'QSV AV1 (Intel Arc)', qsv_av1_10bit: 'QSV AV1 10-bit (Intel Arc)'
         };
         var installedEncoders = null; // names HandBrake lists on this server, or null when unknown
+        var encoderTests = {};        // saved results of the Encoder test tab: name -> { Ok, Message }
+        function encoderBad(n) { return !!(encoderTests[n] && encoderTests[n].Ok === false); }
         function encoderOptions(current) {
             var known = installedEncoders && installedEncoders.length;
             var names = Object.keys(ENC_LABELS).filter(function (n) { return known ? installedEncoders.indexOf(n) >= 0 : ENCODERS.some(function (e) { return e[0] === n; }); });
-            var opts = names.map(function (n) { return [n, ENC_LABELS[n]]; });
+            var opts = names.map(function (n) { return [n, ENC_LABELS[n] + (encoderBad(n) ? ' - not supported' : '')]; });
             if (current && names.indexOf(current) < 0) opts.push([current, (ENC_LABELS[current] || current) + (known ? ' (not installed here)' : '')]);
             return opts;
         }
         // Marks the recommended choice in a dropdown: what Jellyfin's transcode logs point to when they have a clear answer, else a sensible default
         function S(opts, val, key) {
-            var fromLogs = key && playbackSug[key] != null && opts.some(function (o) { return String(o[0]) === String(playbackSug[key]); });
+            // Never recommend something the Encoder test found unsupported on this server.
+            function usable(o, v) { return String(o[0]) === String(v) && o[1].indexOf(' - not supported') < 0; }
+            var fromLogs = key && playbackSug[key] != null && opts.some(function (o) { return usable(o, playbackSug[key]); });
             var pick = fromLogs ? playbackSug[key] : val;
-            return opts.map(function (o) { return String(o[0]) === String(pick) ? [o[0], o[1] + (fromLogs ? ' (suggested from your playback)' : ' (suggested)')] : o; });
+            return opts.map(function (o) { return usable(o, pick) ? [o[0], o[1] + (fromLogs ? ' (suggested from your playback)' : ' (suggested)')] : o; });
         }
         var HIDE_TYPES = ['music', 'books', 'playlists', 'livetv', 'boxsets'];
 
@@ -362,6 +425,19 @@
             return '<div class="checkboxContainer' + (d ? ' checkboxContainer-withDescription' : '') + '"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" data-k="' + k + '"' + (val ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label>' +
                 (d ? '<div class="fieldDescription checkboxFieldDescription">' + d + '</div>' : '') + '</div>';
         }
+        // A checkbox that reveals a number box when ticked (unticked = 0 = off). hideSel: a sibling block to hide while ticked.
+        function togNum(label, d, def, checked, numHtml, hideSel) {
+            return '<div class="hbTogWrap"><div class="checkboxContainer checkboxContainer-withDescription"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="' + def + '"' +
+                (hideSel ? ' data-hide="' + hideSel + '"' : '') + (checked ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label><div class="fieldDescription checkboxFieldDescription">' + d + '</div></div>' +
+                '<div class="hbTogBody hbSub" style="display:' + (checked ? 'block' : 'none') + ';">' + numHtml + '</div></div>';
+        }
+        function syncTogs(root) {
+            $$('.hbTog', root).forEach(function (cb) {
+                var body = cb.closest('.hbTogWrap').querySelector('.hbTogBody'), n = body.querySelector('input[type=number]');
+                cb.checked = (parseInt(n.value || '0', 10) || 0) > 0;
+                body.style.display = cb.checked ? 'block' : 'none';
+            });
+        }
         // One checkbox with Jellyfin's own markup (used where a plain checkbox is needed outside the helpers above)
         function box(cls, attrs, checked, label) {
             return '<label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="' + cls + '" ' + attrs + (checked ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label>';
@@ -387,8 +463,8 @@
                     sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Same as source (keep all tracks)'], ['none', 'Remove all subtitles'], ['burn', 'Burn one track into the video']], 'keep'), h.SubtitleMode || 'keep',
                         'Burning makes the text part of the picture (it can\'t be turned off) and removes the other subtitle tracks.') +
                     '<div class="hbBurn hbSub" style="display:' + (burn ? 'block' : 'none') + ';">' +
-                        txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') +
-                        num('hb.BurnTrack', 'Or an exact subtitle track number (0 = use the language)', h.BurnTrack || 0, 0, 'Picks one specific subtitle track by its number in the file instead of by language. 0 means use the language above.') +
+                        '<div class="hbBurnLang" style="display:' + (h.BurnTrack > 0 ? 'none' : 'block') + ';">' + txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') + '</div>' +
+                        togNum('Pick an exact subtitle track number instead of a language', 'Chooses one specific subtitle track by its number in the file. Off = use the language above.', 1, h.BurnTrack > 0, num('hb.BurnTrack', 'Subtitle track number', h.BurnTrack || 0, 0), '.hbBurnLang') +
                         chk('hb.BurnForcedOnly', 'Forced subtitles only (signs and foreign-language parts)', h.BurnForcedOnly, 'Burns in only the subtitles marked as forced, which are usually signs or short foreign-language lines.') +
                     '</div>' +
                 '</div>' +
@@ -432,6 +508,15 @@
                 var suf = pr && pr.querySelector('.hbSuffix');
                 if (suf) suf.style.display = t.value === 'replace' ? 'none' : 'block';
             }
+            if (t && t.classList && t.classList.contains('hbTog')) {
+                var wrap = t.closest('.hbTogWrap'), body = wrap.querySelector('.hbTogBody'), n = body.querySelector('input[type=number]');
+                if (t.checked) { if (!((parseInt(n.value || '0', 10) || 0) > 0)) n.value = t.getAttribute('data-def'); }
+                else n.value = 0;
+                body.style.display = t.checked ? 'block' : 'none';
+                var hs = t.getAttribute('data-hide'), scope = t.closest('.hbBurn');
+                if (hs && scope) { var other = scope.querySelector(hs); if (other) other.style.display = t.checked ? 'none' : 'block'; }
+            }
+            if (t && t.id === 'SkipIfNotSmaller') $('#hbSavingsWrap').style.display = t.checked ? 'block' : 'none';
             if (t && t.id === 'ScheduleEnabled') $('#hbScheduleBody').style.display = t.checked ? 'block' : 'none';
             if (t && t.getAttribute && t.getAttribute('data-k') === 'hb.SubtitleMode') {
                 var prof = t.closest('.hbProfile');
@@ -459,7 +544,7 @@
             activeTab = name;
             $$('.hbTabBtn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === name); });
             $$('.hbTab').forEach(function (t) { t.style.display = t.getAttribute('data-tab') === name ? 'block' : 'none'; });
-            $('#hbSaveBar').style.display = (name === 'convert' || name === 'queue' || name === 'history') ? 'none' : 'block';
+            $('#hbSaveBar').style.display = (name === 'convert' || name === 'queue' || name === 'history' || name === 'encoders') ? 'none' : 'block';
             if (name === 'queue') refreshQueue();
             if (name === 'history') refreshHistory();
             if (name === 'originals') refreshTrash();
@@ -665,6 +750,17 @@
             if (confirm('Remove ' + ids.length + ' job(s)? A running one will be stopped.')) { picked = {}; $('#hbSelAll').checked = false; queueAction('Queue/Remove', { Ids: ids }); }
         });
         // ---------------------------------------------------------------- history tab
+        // "3 d 4 h", "5 h 12 min", "12 min", "45 s"
+        function fmtLeft(sec) {
+            sec = Math.max(0, Math.round(sec));
+            var d = Math.floor(sec / 86400), h = Math.floor(sec % 86400 / 3600), m = Math.floor(sec % 3600 / 60);
+            return d ? d + ' d ' + h + ' h' : h ? h + ' h ' + m + ' min' : m ? m + ' min' : sec + ' s';
+        }
+        // Wall-clock time that is sec from now: just the time if it is today, else with the weekday
+        function clockAt(sec) {
+            var t = new Date(Date.now() + sec * 1000), now = new Date(), same = t.toDateString() === now.toDateString();
+            return t.toLocaleString([], same ? { hour: 'numeric', minute: '2-digit' } : { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+        }
         function fmtTime(sec) { sec = Math.round(sec || 0); var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60); return h ? h + ' h ' + m + ' min' : m ? m + ' min' : sec + ' s'; }
         var historyRows = [];
         function renderHistory() {
@@ -699,26 +795,59 @@
             }, function () { playbackSug = {}; });
         }
 
-                // ---------------------------------------------------------------- video encoders (HandBrake & tools tab)
+                // ---------------------------------------------------------------- video encoders (Encoder test tab)
+        function rowMsg(n) { var r = encoderTests[n]; return r ? (r.Ok ? '✔ ' : '✖ ') + r.Message : ''; }
         function renderEncoders() {
             var host = $('#hbEncoders');
-            if (!installedEncoders || !installedEncoders.length) { host.innerHTML = '<div class="fieldDescription">Could not read the encoder list (is HandBrake installed?).</div>'; return; }
+            if (!installedEncoders || !installedEncoders.length) { host.innerHTML = '<div class="fieldDescription">Could not read the encoder list (is HandBrake installed?).</div>'; updateEncUi(); return; }
             host.innerHTML = installedEncoders.filter(function (n) { return ENC_LABELS[n]; }).map(function (n) {
                 return '<div class="hbRow"><span class="grow"><b>' + esc(ENC_LABELS[n]) + '</b> <small class="fieldDescription">' + esc(n) + '</small></span>' +
-                    '<span class="hbEncMsg fieldDescription" data-for="' + esc(n) + '"></span>' +
+                    '<span class="hbEncMsg fieldDescription" data-for="' + esc(n) + '">' + esc(rowMsg(n)) + '</span>' +
                     '<button type="button" class="raised hbSmall hbEncTest" data-name="' + esc(n) + '">Test</button></div>';
             }).join('');
+            updateEncUi();
         }
         function loadEncoders() {
-            return api('GET', 'Encoders').then(function (r) { installedEncoders = r.Encoders || []; }, function () { installedEncoders = null; });
+            return api('GET', 'Encoders').then(function (r) { installedEncoders = r.Encoders || []; encoderTests = r.Tests || {}; }, function () { installedEncoders = null; });
+        }
+        // Keeps the dropdown marks, the button label and the "run the test" notices in step with the saved results.
+        function updateEncUi() {
+            $$('select[data-k="hb.Encoder"]').forEach(function (sel) {
+                Array.prototype.forEach.call(sel.options, function (o) {
+                    var t = o.textContent.replace(' - not supported', '');
+                    if (encoderBad(o.value)) t = t.replace(/ \(suggested[^)]*\)/, '') + ' - not supported';
+                    o.textContent = t;
+                });
+            });
+            var any = Object.keys(encoderTests).length > 0, btn = $('#hbEncAll span');
+            if (btn) btn.textContent = any ? 'Retest all' : 'Test all encoders';
+            var show = !any && installedEncoders && installedEncoders.length > 0;
+            $$('.hbEncNotice').forEach(function (n) { n.style.display = show ? 'block' : 'none'; });
+        }
+        function testOne(name) {
+            var b = $('.hbEncTest[data-name="' + name + '"]'), msg = $('.hbEncMsg[data-for="' + name + '"]');
+            b.disabled = true; msg.textContent = 'Testing…';
+            return api('POST', 'Encoders/Test?name=' + encodeURIComponent(name)).then(function (r) {
+                encoderTests[name] = { Ok: r.Ok, Message: r.Message };
+                msg.textContent = rowMsg(name);
+            }, function (x) { return errText(x, 'Test failed.').then(function (t) { msg.textContent = '✖ ' + t; }); }).then(function () { b.disabled = false; updateEncUi(); });
         }
         $('#hbEncoders').addEventListener('click', function (e) {
-            var b = e.target.closest('.hbEncTest'); if (!b) return;
-            var name = b.getAttribute('data-name'), msg = $('.hbEncMsg[data-for="' + name + '"]');
-            b.disabled = true; msg.textContent = 'Testing…';
-            api('POST', 'Encoders/Test?name=' + encodeURIComponent(name)).then(function (r) { msg.textContent = (r.Ok ? '✔ ' : '✖ ') + r.Message; },
-                function (x) { errText(x, 'Test failed.').then(function (t) { msg.textContent = '✖ ' + t; }); }).then(function () { b.disabled = false; });
+            var b = e.target.closest('.hbEncTest'); if (b) testOne(b.getAttribute('data-name'));
         });
+        // Test all / Retest all: every listed encoder, one after another.
+        $('#hbEncAll').addEventListener('click', function () {
+            var names = installedEncoders ? installedEncoders.filter(function (n) { return ENC_LABELS[n]; }) : [];
+            if (!names.length) return;
+            var all = $('#hbEncAll'), note = $('#hbEncAllMsg'), i = 0;
+            all.disabled = true; $$('.hbEncTest').forEach(function (x) { x.disabled = true; });
+            (function next() {
+                if (i >= names.length) { all.disabled = false; $$('.hbEncTest').forEach(function (x) { x.disabled = false; }); note.textContent = 'Done: ' + names.filter(function (n) { return encoderBad(n); }).length + ' not supported.'; return; }
+                note.textContent = 'Testing ' + (i + 1) + ' of ' + names.length + ': ' + ENC_LABELS[names[i]] + '…';
+                testOne(names[i++]).then(next);
+            })();
+        });
+        page.addEventListener('click', function (e) { if (e.target.closest('.hbGoEncTest')) showTab('encoders'); });
 
         function refreshTrash() {
             api('GET', 'Trash').then(function (list) {
@@ -749,9 +878,23 @@
                 $('#hbPauseBtn').firstElementChild.textContent = s.Paused ? 'Continue' : 'Pause';
                 $('#hbPauseNote').textContent = s.Paused ? 'Paused: nothing runs until you press Continue (this survives restarts).' : 'Pause freezes the running encode and keeps anything new from starting.';
                 var line = '<b>' + esc(s.State) + (s.Suspended && !s.Paused ? ' (suspended: streaming)' : '') + '</b> ' + esc(s.Message || '');
-                if (s.CurrentFile) line += '<br>' + esc(s.CurrentFile) + ' — ' + (s.Progress || 0).toFixed(1) + '%' + (s.Eta ? ' ETA ' + esc(s.Eta) : '');
+                if (s.CurrentFile) {
+                    line += '<br>' + esc(s.CurrentFile) + ' — ' + (s.Progress || 0).toFixed(1) + '%';
+                    if (s.Suspended) line += ' — on hold, so no estimate';
+                    else if (s.EtaSeconds != null) line += ' — about ' + fmtLeft(s.EtaSeconds) + ' left (done around ' + clockAt(s.EtaSeconds) + ')';
+                    else if (s.Eta) line += ' — ETA ' + esc(s.Eta);
+                }
                 $('#hbStatus').innerHTML = line + '<br>' + hbLine;
                 $('#hbBar').style.width = Math.min(100, s.Progress || 0) + '%';
+                var w = s.Waiting || {}, wt = '';
+                if (w.Files > 0) {
+                    wt = 'Waiting: ' + w.Files + (w.Files === 1 ? ' file' : ' files') + ' (' + fmtBytes(w.Bytes) + ').';
+                    if (w.Seconds != null) {
+                        var all = w.Seconds + (s.Suspended || s.EtaSeconds == null ? 0 : s.EtaSeconds);
+                        wt += ' At your usual speed that is about ' + fmtLeft(all) + ', all done around ' + clockAt(all) + '. The estimate ignores schedule windows and pauses, and counts files that may end up skipped.';
+                    } else wt += ' A time estimate appears after a few finished conversions.';
+                }
+                $('#hbWaiting').textContent = wt;
                 $('#hbStats').textContent = 'Converted: ' + s.Converted + ' | Space saved: ' + fmtBytes(s.BytesSaved) + ' | Skipped (not smaller): ' + s.Skipped + ' | Failed (auto): ' + s.Failed + ' | Queued: ' + s.Queued + (s.TrashCount ? ' | Originals on hold: ' + s.TrashCount + ' (' + fmtBytes(s.TrashBytes) + ')' : '');
                 if (activeTab === 'queue') refreshQueue();
                 if (activeTab === 'history') refreshHistory();
@@ -789,6 +932,8 @@
                 $('#hbScheduleBody').style.display = cfg.ScheduleEnabled ? 'block' : 'none';
                 $('#MinFreeSpaceGb').value = cfg.MinFreeSpaceGb == null ? 2 : cfg.MinFreeSpaceGb;
                 $('#TrashFolder').value = cfg.TrashFolder || '';
+                syncTogs($('.hbTab[data-tab=originals]'));
+                $('#hbSavingsWrap').style.display = cfg.SkipIfNotSmaller ? 'block' : 'none';
                 renderEncoders();
                 $('#hbDefaults').innerHTML = profileHtml(cfg.Defaults);
                 renderLibraries();
