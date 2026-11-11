@@ -1,0 +1,33 @@
+name: Release plugin
+on:
+  push:
+    branches: [main]
+    paths-ignore: [manifest.json]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build, release, update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          export VERSION="$(tr -d ' \r\n' < VERSION)"
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "v${VERSION} already released - bump VERSION to publish a new one."
+            exit 0
+          fi
+          bash .github/make-release.sh
+          gh release create "v${VERSION}" "HandBrakeConverter_${VERSION}.zip" --title "v${VERSION}" --notes "$(head -n1 CHANGELOG.txt)"
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add manifest.json
+          git commit -m "Update manifest for v${VERSION}"
+          git push
