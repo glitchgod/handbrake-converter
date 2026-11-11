@@ -24,7 +24,7 @@ jobs:
             echo "v${VERSION} already released - bump VERSION to publish a new one."
             exit 0
           fi
-          bash .github/make-release.sh
+          bash make-release.sh
           gh release create "v${VERSION}" "HandBrakeConverter_${VERSION}.zip" --title "v${VERSION}" --notes "$(head -n1 CHANGELOG.txt)"
           git config user.name "github-actions"
           git config user.email "actions@users.noreply.github.com"
