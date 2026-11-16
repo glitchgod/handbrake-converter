@@ -30,6 +30,7 @@ public sealed class ConversionService : BackgroundService
     private readonly WatchDataMover _mover;
     private readonly ILogger<ConversionService> _log;
     private readonly StatusBoard _board = new();
+    private volatile bool _stopAuto;
 
     public ConversionService(
         ILibraryManager library,
@@ -68,6 +69,27 @@ public sealed class ConversionService : BackgroundService
         return s;
     }
 
+    /// <summary>One queue entry per Auto-convert library that has files waiting (see <see cref="JobStore.SyncAuto"/>).</summary>
+    internal void SyncAutoEntries(PluginConfiguration cfg)
+    {
+        // Only "is anything waiting" per library (cheap); the library order in the settings is the default order of new entries.
+        var withPending = cfg.Libraries.Where(l => l.AutoProcess && _backlog.FindPending(cfg, 1, l.LibraryId).Count > 0).Select(l => (l.LibraryId, l.Name)).ToList();
+        _jobs.SyncAuto(withPending);
+    }
+
+    /// <summary>
+    /// Stops the automatic conversion that is running right now (it is picked up again later) so queued jobs can start. Returns false
+    /// when no automatic conversion is running.
+    /// </summary>
+    public bool StopAutomatic()
+    {
+        var s = _board.Snapshot();
+        if (s.CurrentFile.Length == 0 || s.CurrentJobId.Length > 0) return false;
+        _stopAuto = true;
+        _watcher.Wake();
+        return true;
+    }
+
     /// <summary>Pause freezes a running encode and stops anything new from starting; Continue undoes it. Persisted.</summary>
     public void SetPaused(bool paused)
     {
@@ -80,6 +102,8 @@ public sealed class ConversionService : BackgroundService
     {
         public Stopwatch Clock { get; } = Stopwatch.StartNew();
         public string Signature { get; init; } = string.Empty;
+        public SubPlan? SubPlan { get; init; }
+        public string? Ffmpeg { get; init; }
         public Job? Job => Work.Job;
         public ConversionProfile Profile => Work.Profile;
     }
@@ -130,8 +154,21 @@ public sealed class ConversionService : BackgroundService
         if (_state.Paused) { _board.Rest("Paused", "Paused. Press Continue on the Overview tab to resume."); return false; }
 
         var inWindow = ScheduleEvaluator.IsAllowed(DateTime.Now, cfg);
-        var manual = _jobs.Next(j => inWindow || j.IgnoreSchedule);
-        if (manual == null && !inWindow)
+        SyncAutoEntries(cfg);
+
+        // The queue order decides: walk it from the top; a manual job is the work, an Auto-convert entry is the next waiting file of its library.
+        Job? manual = null; Pending? auto = null;
+        foreach (var e in _jobs.Entries())
+        {
+            if (e.IsAuto)
+            {
+                if (!inWindow) continue;
+                if (_backlog.FindPending(cfg, 1, e.LibraryId).FirstOrDefault() is { } found) { auto = found; break; }
+            }
+            else if (inWindow || e.IgnoreSchedule) { manual = e; break; }
+        }
+
+        if (manual == null && auto == null && !inWindow)
         {
             var q = _jobs.QueuedCount();
             _board.Rest("Waiting", q > 0 ? $"Outside the scheduled window ({q} queued)." : "Outside the scheduled window.");
@@ -153,7 +190,7 @@ public sealed class ConversionService : BackgroundService
 
         Work? work = null;
         if (manual != null) work = new Work(manual.ItemId, manual.Path, manual.Profile, manual, "queue");
-        else if (_backlog.FindPending(cfg, 1).FirstOrDefault() is { } p) work = new Work(p.ItemId, p.Path, p.Profile, null, p.Library);
+        else if (auto != null) work = new Work(auto.ItemId, auto.Path, auto.Profile, null, auto.Library);
 
         if (work == null) { _board.Rest("Idle", "Nothing to convert."); return false; }
 
@@ -180,16 +217,20 @@ public sealed class ConversionService : BackgroundService
         var src = w.Path;
         var profile = w.Profile;
 
+        _stopAuto = false; // a stop request only ever applies to the automatic conversion that was running when it was made
         if (!File.Exists(src)) { Fail(w, "Source file not found: " + src); return true; }
 
         var (hb, ext) = ResolveContainer(profile, src);
-        var signature = SettingsSignature(hb);
+        var signature = VideoSignature(hb);
 
-        // Already converted with these very settings (e.g. 3 of 9 episodes done by hand earlier)? Then there is nothing to do:
-        // finish the job without encoding. "Convert again" (Force) overrides.
+        // Already converted with these very video/audio settings (e.g. 3 of 9 episodes done by hand earlier)? Then the video is not
+        // touched again. If only the subtitles are not what the settings ask for, they alone are fixed (fast, no re-encode);
+        // otherwise the job finishes with nothing to do. "Convert again" (Force) overrides.
         var knownSig = _state.SignatureOf(src);
-        if (w.Job is { Force: false } && _state.IsProcessed(w.ItemId, src) && (knownSig == null || knownSig == signature))
+        if (w.Job is { Force: false } && _state.IsProcessed(w.ItemId, src) && (knownSig == null || knownSig == signature || knownSig == SettingsSignature(hb)))
         {
+            if (await TryFixSubtitlesAsync(w, hb, ext, ct).ConfigureAwait(false)) return true;
+
             const string why = "Already converted with these settings; nothing to do.";
             _log.LogInformation("{Src}: {Why}", src, why);
             _jobs.SetStatus(w.Job.Id, "Skipped", why);
@@ -247,7 +288,13 @@ public sealed class ConversionService : BackgroundService
         }
 
         // Non-video extension so Jellyfin never scans a half-written file.
-        var plan = new Plan(w, hb, src, final, final + ".hbtmp", size, keepDays, info) { Signature = signature };
+        // Subtitles are chosen and written by ffmpeg after the encode (HandBrake would store text subtitles as SSA/ASS and cannot pick tracks
+        // by forced flag). Without ffmpeg HandBrake keeps all tracks itself.
+        SubPlan? subPlan = null;
+        var ffmpeg = hb.SubtitleMode == "keep" && info?.Subs is { Count: > 0 } ? _probe.FfmpegPath() : null;
+        if (ffmpeg != null) subPlan = SubtitlePlanner.Make(info!.Subs, hb, IsMp4(ext));
+
+        var plan = new Plan(w, hb, src, final, final + ".hbtmp", size, keepDays, info) { Signature = signature, SubPlan = subPlan, Ffmpeg = ffmpeg };
         TryDelete(plan.Temp);
 
         if (!await EncodeAsync(plan, launcher, ct).ConfigureAwait(false)) return true;
@@ -315,7 +362,7 @@ public sealed class ConversionService : BackgroundService
         HandBrakeRun run;
         try
         {
-            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp), Cfg.LowPriority,
+            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp, noSubtitles: p.SubPlan != null), Cfg.LowPriority,
                 (pct, eta) => _board.Set(s => { s.Progress = pct; if (eta != null) s.Eta = eta; }));
         }
         catch (Exception ex)
@@ -329,7 +376,7 @@ public sealed class ConversionService : BackgroundService
         {
             _log.LogInformation("Converting ({Origin}) {Src} -> {Final}", p.Work.Origin, p.Source, p.Final);
             if (job != null) _jobs.SetStatus(job.Id, "Running");
-            _board.Set(s => { s.State = "Encoding"; s.Message = string.Empty; s.CurrentFile = p.Source; s.CurrentJobId = job?.Id ?? string.Empty; s.Progress = 0; s.Eta = string.Empty; s.Suspended = false; });
+            _board.Set(s => { s.State = "Encoding"; s.Message = string.Empty; s.CurrentFile = p.Source; s.CurrentJobId = job?.Id ?? string.Empty; s.Progress = 0; s.Eta = string.Empty; s.Suspended = false; s.Origin = p.Work.Origin; });
 
             string? stop;
             try { stop = await MonitorAsync(run, job, ct).ConfigureAwait(false); }
@@ -346,7 +393,14 @@ public sealed class ConversionService : BackgroundService
             {
                 await run.KillAsync().ConfigureAwait(false);
                 TryDelete(p.Temp);
-                if (stop == "cancel")
+                if (stop == "autostop")
+                {
+                    _stopAuto = false;
+                    _log.LogInformation("Automatic conversion of {Src} stopped to let queued jobs run", p.Source);
+                    Record(p.Work, "Skipped", "Stopped so your queued job could run; it will be picked up again afterwards", seconds: p.Clock.Elapsed.TotalSeconds);
+                    _board.Rest("Idle", "Stopped the automatic conversion; starting your queued job.");
+                }
+                else if (stop == "cancel")
                 {
                     _log.LogInformation("Cancelled {Src}", p.Source);
                     if (job != null) _jobs.SetStatus(job.Id, "Cancelled");
@@ -364,13 +418,146 @@ public sealed class ConversionService : BackgroundService
             }
 
             var exit = await run.WaitAsync().ConfigureAwait(false);
-            if (exit == 0 && File.Exists(p.Temp) && new FileInfo(p.Temp).Length > 100_000) return true;
+            if (exit == 0 && File.Exists(p.Temp) && new FileInfo(p.Temp).Length > 100_000)
+                return p.SubPlan is { Keep.Count: > 0 } ? await AddSubtitlesAsync(p, ct).ConfigureAwait(false) : true;
 
             _log.LogError("HandBrake failed (exit {Code}) on {Src}. Last output:\n{Tail}", exit, p.Source, run.AllOutput());
             TryDelete(p.Temp);
             Fail(p.Work, $"HandBrake failed (exit {exit}) on {Path.GetFileName(p.Source)}: {run.LastLines(3)}".TrimEnd(' ', ':'), p.Clock.Elapsed.TotalSeconds);
             return false;
         }
+    }
+
+    /// <summary>Adds the planned subtitle tracks from the original to the encoded file (ffmpeg, copying everything else as it is).</summary>
+    private async Task<bool> AddSubtitlesAsync(Plan p, CancellationToken ct)
+    {
+        var mux = p.Temp + ".sub";
+        _board.Set(s => { s.State = "Encoding"; s.Message = "Adding subtitles…"; s.Progress = 100; });
+        var (ok, tail) = await RunFfmpegAsync(p.Ffmpeg!, SubtitleMux.Args(p.Temp, p.Source, p.SubPlan!, IsMp4(Path.GetExtension(p.Final)), mux), p.Job, ct).ConfigureAwait(false);
+        if (ok && File.Exists(mux) && new FileInfo(mux).Length > 100_000)
+        {
+            File.Move(mux, p.Temp, true);
+            return true;
+        }
+
+        TryDelete(mux);
+        TryDelete(p.Temp);
+        if (p.Job != null && _jobs.IsCancelRequested(p.Job.Id))
+        {
+            _jobs.SetStatus(p.Job.Id, "Cancelled");
+            Record(p.Work, "Skipped", "Stopped by you", seconds: p.Clock.Elapsed.TotalSeconds);
+            _board.Rest("Idle", "Cancelled.");
+            return false;
+        }
+
+        if (p.Job == null && tail == "stopped")
+        {
+            Record(p.Work, "Skipped", "Stopped so your queued job could run; it will be picked up again afterwards", seconds: p.Clock.Elapsed.TotalSeconds);
+            _board.Rest("Idle", "Stopped the automatic conversion; starting your queued job.");
+            return false;
+        }
+
+        Fail(p.Work, "Could not add the subtitles (ffmpeg): " + tail, p.Clock.Elapsed.TotalSeconds);
+        return false;
+    }
+
+    private static bool IsMp4(string ext) => ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase) || ext.Equals(".m4v", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Runs ffmpeg to completion; stopping the job (or Jellyfin shutting down) kills it.</summary>
+    private async Task<(bool Ok, string Tail)> RunFfmpegAsync(string ffmpeg, System.Collections.Generic.List<string> args, Job? job, CancellationToken ct)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo(ffmpeg) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+        foreach (var a in args) psi.ArgumentList.Add(a);
+        using var proc = System.Diagnostics.Process.Start(psi);
+        if (proc == null) return (false, "could not start ffmpeg");
+        var err = proc.StandardError.ReadToEndAsync(ct);
+        _ = proc.StandardOutput.ReadToEndAsync(ct);
+        try
+        {
+            while (!proc.HasExited)
+            {
+                ct.ThrowIfCancellationRequested();
+                if (job != null && _jobs.IsCancelRequested(job.Id)) { try { proc.Kill(true); } catch { } return (false, "stopped"); }
+                if (job == null && _stopAuto) { try { proc.Kill(true); } catch { } _stopAuto = false; return (false, "stopped"); }
+                await Task.Delay(500, ct).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) { try { proc.Kill(true); } catch { } throw; }
+
+        await proc.WaitForExitAsync(ct).ConfigureAwait(false);
+        var text = (await err.ConfigureAwait(false)).Trim();
+        return (proc.ExitCode == 0, text.Length > 300 ? text[^300..] : text);
+    }
+
+    /// <summary>
+    /// The file was converted before with the same video/audio settings. If its subtitles are not what the settings ask for (too many
+    /// languages, wrong text format, or all of them to be removed), fix just those with a stream copy: no re-encode, a minute at most.
+    /// Returns true when it handled the job (fixed it, or failed trying); false when there was nothing to fix.
+    /// </summary>
+    private async Task<bool> TryFixSubtitlesAsync(Work w, HandBrakeSettings hb, string ext, CancellationToken ct)
+    {
+        if (hb.SubtitleMode is not ("keep" or "none")) return false;
+        var cfg = Cfg; var profile = w.Profile; var src = w.Path;
+        var dir = Path.GetDirectoryName(src)!;
+        var baseName = Path.GetFileNameWithoutExtension(src);
+        var final = Path.Combine(dir, profile.DeleteOriginal ? baseName + ext : baseName + " " + profile.GetLabel() + ext);
+        var target = File.Exists(final) ? final : profile.DeleteOriginal && File.Exists(src) ? src : null;
+        var ffmpeg = _probe.FfmpegPath();
+        if (target == null || ffmpeg == null) return false;
+
+        var info = await _probe.ProbeAsync(target, ct).ConfigureAwait(false);
+        if (info == null) return false;
+        var mp4 = IsMp4(Path.GetExtension(target));
+        SubPlan? sp = hb.SubtitleMode == "none"
+            ? (info.SubtitleTracks > 0 ? new SubPlan(Array.Empty<SubStream>(), Array.Empty<string>(), info.SubtitleTracks, "all subtitle tracks removed") { NeedsWork = true } : null)
+            : SubtitlePlanner.Make(info.Subs, hb, mp4);
+        if (sp is not { NeedsWork: true }) return false;
+
+        var size = new FileInfo(target).Length;
+        var keepDays = profile.DeleteOriginal ? Math.Max(0, cfg.KeepReplacedDays) : 0;
+        var space = CheckSpace(cfg, dir, target, size, keepDays > 0);
+        if (space != null) { _board.Rest("Waiting", space); return false; }
+
+        var plan = new Plan(w, hb, target, target, target + ".hbtmp", size, keepDays, info) { Signature = VideoSignature(hb) };
+        TryDelete(plan.Temp);
+        if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Running");
+        _board.Set(s => { s.State = "Encoding"; s.Message = "Fixing subtitles only (video is not touched)…"; s.CurrentFile = target; s.CurrentJobId = w.Job?.Id ?? string.Empty; s.Progress = 50; s.Eta = string.Empty; s.Suspended = false; s.Origin = w.Origin; });
+        _log.LogInformation("{Target}: fixing subtitles only ({Plan})", target, sp.Summary);
+
+        var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.Args(target, null, sp, mp4, plan.Temp), w.Job, ct).ConfigureAwait(false);
+        if (!ok || !File.Exists(plan.Temp) || new FileInfo(plan.Temp).Length < 100_000)
+        {
+            TryDelete(plan.Temp);
+            if (w.Job != null && _jobs.IsCancelRequested(w.Job.Id)) { _jobs.SetStatus(w.Job.Id, "Cancelled"); Record(w, "Skipped", "Stopped by you"); _board.Rest("Idle", "Cancelled."); }
+            else Fail(w, "Could not fix the subtitles (ffmpeg): " + tail, plan.Clock.Elapsed.TotalSeconds);
+            return true;
+        }
+
+        var result = await _probe.ProbeAsync(plan.Temp, ct).ConfigureAwait(false);
+        var bad = result == null ? "Could not read the fixed file with ffprobe, so it was not used (the file was left as it was)."
+            : ResultCheck.Problem(info, result, hb, mp4, sp.Keep.Count);
+        if (bad != null) { TryDelete(plan.Temp); Fail(w, bad, plan.Clock.Elapsed.TotalSeconds); return true; }
+
+        if (!await WaitForViewersAsync(plan, ct).ConfigureAwait(false)) return true;
+        TrashEntry? held = null;
+        try
+        {
+            if (profile.DeleteOriginal && keepDays > 0) held = _trash.Add(target, keepDays, HoldingFolder(cfg, target));
+            File.Move(plan.Temp, target, true);
+        }
+        catch (Exception ex)
+        {
+            TryDelete(plan.Temp);
+            Fail(w, "Could not finalise the subtitle fix: " + ex.Message, plan.Clock.Elapsed.TotalSeconds);
+            return true;
+        }
+
+        var newSize = new FileInfo(target).Length;
+        if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Done");
+        Record(w, "Converted", "Subtitles fixed, video and audio untouched: " + sp.Summary + (held != null ? $"; previous file held {keepDays} days" : string.Empty), size, newSize, plan.Clock.Elapsed.TotalSeconds, Path.GetFileName(target));
+        _board.Rest("Idle", "Fixed the subtitles of " + Path.GetFileName(target));
+        try { _library.QueueLibraryScan(); } catch (Exception ex) { _log.LogWarning(ex, "Library scan request failed"); }
+        return true;
     }
 
     /// <summary>Waits for the encode to end, freezing it while you paused or someone is watching. Returns "cancel", "window" or null (finished).</summary>
@@ -383,6 +570,7 @@ public sealed class ConversionService : BackgroundService
             var cfg = Cfg;
 
             if (job != null && _jobs.IsCancelRequested(job.Id)) return "cancel";
+            if (job == null && _stopAuto) return "autostop";
             if (!cfg.FinishCurrentAfterWindow && !(job?.IgnoreSchedule ?? false) && !ScheduleEvaluator.IsAllowed(DateTime.Now, cfg)) return "window";
 
             var byUser = _state.Paused;
@@ -433,7 +621,7 @@ public sealed class ConversionService : BackgroundService
         var result = await _probe.ProbeAsync(p.Temp, ct).ConfigureAwait(false);
         var bad = p.SourceInfo == null || result == null
             ? "Could not read the file details with ffprobe, so the result was not trusted (original kept). Turn off the check in Original files > After converting if ffprobe is unavailable."
-            : ResultCheck.Problem(p.SourceInfo, result, p.HandBrake, Path.GetExtension(p.Final).Equals(".mp4", StringComparison.OrdinalIgnoreCase));
+            : ResultCheck.Problem(p.SourceInfo, result, p.HandBrake, Path.GetExtension(p.Final).Equals(".mp4", StringComparison.OrdinalIgnoreCase), p.SubPlan?.Keep.Count);
         if (bad == null) return true;
 
         TryDelete(p.Temp);
@@ -547,7 +735,20 @@ public sealed class ConversionService : BackgroundService
     }
 
     /// <summary>Short fingerprint of everything that shapes the encoded video (HandBrake arguments minus the file names).</summary>
-    internal static string SettingsSignature(HandBrakeSettings hb)
+    internal static string SettingsSignature(HandBrakeSettings hb) => Hash(hb);
+
+    /// <summary>
+    /// Like <see cref="SettingsSignature"/> but ignoring everything about subtitle tracks (they can be fixed without re-encoding the
+    /// video). Burning subtitles in changes the picture, so that mode still counts.
+    /// </summary>
+    internal static string VideoSignature(HandBrakeSettings hb)
+    {
+        var c = hb.Clone();
+        if (c.SubtitleMode != "burn") c.SubtitleMode = "none";
+        return Hash(c);
+    }
+
+    private static string Hash(HandBrakeSettings hb)
     {
         var text = string.Join(' ', HandBrakeArgs.Build(hb, "in", "out"));
         var hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(text));

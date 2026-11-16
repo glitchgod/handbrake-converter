@@ -137,9 +137,9 @@
 
             <!-- ============ QUEUE ============ -->
             <div class="hbTab" data-tab="queue" style="display:none">
-                <div class="fieldDescription">What is converting now and what is waiting, in the order it will run (queued jobs run before Auto-convert). Finished conversions leave this list and appear under History. Use Top and the arrows to change the order, tick items to remove several at once, or press Stop to end the running one.</div>
+                <div class="fieldDescription">Everything that will be converted, in the order it will run, one file at a time. Each library with Auto-convert on has one row of its own ("Automatic · library") that stands for all of its waiting files, so you can put it above, between or below your manual jobs, for example your priority shows first, then the automatic library, then more manual ones. A row runs until it has nothing left, so manual jobs below an automatic row wait for that whole library; move them up to run sooner. New manual jobs are added just above the first automatic row. Finished conversions leave this list and appear under History. Use Top and the arrows to change the order, tick manual jobs to remove several at once, or press Stop to end the running one.</div>
                 <div class="verticalSection">
-                <h2 class="sectionTitle">Jobs</h2>
+                <h2 class="sectionTitle">Order of work</h2>
                 <div id="hbQueueTools">
                     <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbSelAll" /><span>Select all</span></label>
                     <button is="emby-button" type="button" class="raised" id="hbRemoveSel"><span>Remove selected</span></button>
@@ -482,7 +482,13 @@
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">Subtitles</h2>' + desc('What happens to the subtitle tracks.') +
                     sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Same as source (keep all tracks)'], ['none', 'Remove all subtitles'], ['burn', 'Burn one track into the video']], 'keep'), h.SubtitleMode || 'keep',
-                        'Burning makes the text part of the picture (it can\'t be turned off) and removes the other subtitle tracks.') +
+                        'Keeping leaves them as separate tracks you can switch on and off. Burning makes the text part of the picture (it can\'t be turned off), removes the other tracks and is for always-on subtitles.') +
+                    '<div class="hbSubKeep hbSub" style="display:' + (h.SubtitleMode === 'burn' || h.SubtitleMode === 'none' ? 'none' : 'block') + ';">' +
+                        txt('hb.SubtitleLanguages', 'Languages to keep (3-letter codes, e.g. eng or eng, spa; empty = all)', h.SubtitleLanguages == null ? 'eng' : h.SubtitleLanguages, 'Tracks in other languages are dropped, so a file with 30 subtitle tracks ends up with just the ones you can read. If a file has none in these languages, nothing is dropped.') +
+                        chk('hb.SubtitleKeepForced', 'Also keep forced tracks (subtitles for foreign-language scenes)', h.SubtitleKeepForced !== false, 'Forced tracks are the short subtitles that appear only when characters speak another language (for example Spanish lines in an English show). They are kept even if their language is not in the list above.') +
+                        sel('hb.SubtitleFormat', 'Text subtitle format', [['srt', 'SRT: plays on Roku and nearly everything without re-encoding the video'], ['asis', 'Leave as they are (ASS, MOV_TEXT…)']], h.SubtitleFormat || 'srt',
+                            'ASS and MOV_TEXT subtitles often make a player (Roku in particular) ask Jellyfin to burn them into a re-encoded video, which looks bad. SRT avoids that. Picture subtitles (PGS, VobSub) cannot be converted and are kept as they are in MKV (MP4 cannot hold them). SRT conversion needs MKV; in MP4 the format MP4 uses (MOV_TEXT) is the only text format.') +
+                    '</div>' +
                     '<div class="hbBurn hbSub" style="display:' + (burn ? 'block' : 'none') + ';">' +
                         '<div class="hbBurnLang" style="display:' + (h.BurnTrack > 0 ? 'none' : 'block') + ';">' + txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') + '</div>' +
                         togNum('Pick an exact subtitle track number instead of a language', 'Chooses one specific subtitle track by its number in the file. Off = use the language above.', 1, h.BurnTrack > 0, num('hb.BurnTrack', 'Subtitle track number', h.BurnTrack || 0, 0), '.hbBurnLang') +
@@ -552,6 +558,8 @@
                 var prof = t.closest('.hbProfile');
                 var burn = prof && prof.querySelector('.hbBurn');
                 if (burn) burn.style.display = t.value === 'burn' ? 'block' : 'none';
+                var keepBox = prof && prof.querySelector('.hbSubKeep');
+                if (keepBox) keepBox.style.display = t.value === 'keep' ? 'block' : 'none';
             }
             if (t && t.classList && t.classList.contains('hbCustom')) {
                 var card = t.closest('.hbLib');
@@ -756,41 +764,65 @@
         function etaToSec(t) { var m = /(\d+)h(\d+)m(\d+)s/.exec(t || ''); return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null; }
         // "x265 (HEVC) · MKV · 720p max · subtitles kept · replaces the original file"
         function jobFormat(j) {
-            var subs = j.Subtitles === 'none' ? 'subtitles removed' : j.Subtitles === 'burn' ? 'subtitles burned in' : 'subtitles kept';
+            var subs = j.Subtitles === 'none' ? 'subtitles removed' : j.Subtitles === 'burn' ? 'subtitles burned in' : j.SubtitleLanguages ? 'subtitles: ' + j.SubtitleLanguages + (j.SubtitleKeepForced ? ' + forced' : '') : 'all subtitles kept';
             return [ENC_LABELS[j.Encoder] || j.Encoder, j.Container, j.MaxHeight ? j.MaxHeight + 'p max' : 'same resolution', subs,
                 j.DeleteOriginal ? (j.NewItem ? 'replaces the original with a ' + j.Container + ' file (shows up as a new item in Jellyfin)' : 'replaces the original file') : 'keeps the original and adds a "' + (j.Suffix || '- HandBrake') + '" copy'].join(' · ');
         }
-        function refreshQueue() {
-            api('GET', 'Queue').then(function (jobs) {
-                var host = $('#hbQueue');
-                var ids = {}; jobs.forEach(function (j) { ids[j.Id] = 1; });
-                Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
-                if (!jobs.length) { host.innerHTML = '<div class="fieldDescription">Nothing in the queue. Add titles from Manual convert; finished ones are listed under History.</div>'; return; }
-                var queued = jobs.filter(function (j) { return j.Status === 'Queued'; });
-                host.innerHTML = jobs.map(function (j) {
-                    var running = j.Status === 'Running';
-                    var live = running && lastStatus && lastStatus.CurrentJobId === j.Id;
+        var autoOpen = {}, lastJobs = [];
+        function baseName(p) { return (p || '').split(/[\\/]/).pop(); }
+        function renderQueue(jobs) {
+            var host = $('#hbQueue');
+            var ids = {}; jobs.forEach(function (j) { ids[j.Id] = 1; });
+            Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
+            if (!jobs.length) { host.innerHTML = '<div class="fieldDescription">Nothing in the queue. Add titles from Manual convert; finished ones are listed under History.</div>'; return; }
+            var queued = jobs.filter(function (j) { return j.Status === 'Queued'; });
+            var runningAuto = jobs.filter(function (j) { return j.Kind === 'auto' && j.Running; })[0];
+            host.innerHTML = jobs.map(function (j) {
+                var pos = queued.indexOf(j), isAuto = j.Kind === 'auto';
+                var btn = function (to, label, off) { return '<button type="button" class="raised hbSmall hbMove" data-id="' + esc(j.Id) + '" data-to="' + to + '"' + (off ? ' disabled' : '') + '>' + label + '</button>'; };
+                var moves = btn('top', 'Top', queued[0] === j) + btn('up', '▲', queued[0] === j) + btn('down', '▼', queued[queued.length - 1] === j);
+                var place = pos === 0 ? 'Waiting · up next' : 'Waiting · ' + (pos + 1) + ' in line';
+                if (isAuto) {
+                    var live = j.Running && lastStatus;
                     var pct = live ? Math.max(0, Math.min(100, lastStatus.Progress || 0)) : 0;
-                    var prog;
-                    if (running) {
-                        var left = live ? etaToSec(lastStatus.Eta) : null;
-                        prog = live ? pct.toFixed(1) + '%' + (left != null ? ' · about ' + fmtLeft(left) + ' left (done around ' + clockAt(left) + ')' : '')
-                            + (lastStatus.Suspended ? ' · ' + (lastStatus.Paused ? 'paused' : 'suspended: streaming') : '') : 'Starting…';
-                    } else {
-                        var pos = queued.indexOf(j);
-                        prog = pos === 0 ? 'Waiting · up next' : 'Waiting · ' + (pos + 1) + ' in line';
-                    }
-                    var btn = function (to, label, off) { return '<button type="button" class="raised hbSmall hbMove" data-id="' + esc(j.Id) + '" data-to="' + to + '"' + (off ? ' disabled' : '') + '>' + label + '</button>'; };
-                    var act = running ? '<button type="button" class="raised hbSmall hbStop" data-id="' + esc(j.Id) + '">Stop</button>'
-                        : btn('top', 'Top', queued[0] === j) + btn('up', '▲', queued[0] === j) + btn('down', '▼', queued[queued.length - 1] === j);
-                    var name = j.Title || (j.Path || '').split(/[\\/]/).pop();
-                    return '<div class="hbItem" style="--p:' + pct + '%" title="' + esc(j.Path) + '"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbJobPick" data-id="' + esc(j.Id) + '"' + (picked[j.Id] ? ' checked' : '') + ' /><span></span></label>' +
-                        '<div class="hbBody"><div class="hbName">' + esc(name) + '</div><div class="hbProg">' + esc(prog) + '</div><div class="hbFmt">' + esc(jobFormat(j)) + '</div></div><div class="hbActs">' + act + '</div></div>';
-                }).join('');
-            });
+                    var left = live && !lastStatus.Suspended ? etaToSec(lastStatus.Eta) : null;
+                    var prog = j.Running ? 'Converting now: ' + baseName(j.File) + ' · ' + pct.toFixed(1) + '%' + (left != null ? ' · about ' + fmtLeft(left) + ' left' : '') + (live && lastStatus.Suspended ? ' · on hold' : '') : place;
+                    var manualAbove = queued.slice(0, pos).some(function (x) { return x.Kind !== 'auto'; });
+                    var open = !!autoOpen[j.LibraryId];
+                    var more = '';
+                    if (open) more = (j.Next || []).map(function (p) { return '<div class="hbFmt" title="' + esc(p) + '">' + esc(baseName(p)) + '</div>'; }).join('') + (j.Total > (j.Next || []).length ? '<div class="hbFmt">…and ' + (j.Total - j.Next.length) + ' more</div>' : '');
+                    var act = (j.Running && manualAbove ? '<button type="button" class="raised hbSmall hbStopAuto">Stop automatic &amp; start now</button>' : '') + moves;
+                    return '<div class="hbItem hbAutoRow" style="--p:' + pct + '%"><span style="flex:0 0 2.2em"></span><div class="hbBody"><div class="hbName">Automatic · ' + esc(j.Title) + '</div><div class="hbProg">' + esc(prog) + '</div>' +
+                        (j.Running && manualAbove ? '<div class="hbProg">Your manual jobs above start as soon as this file is done.</div>' : '') +
+                        '<div class="hbFmt">' + j.Total + (j.Total === 1 ? ' file' : ' files') + ' waiting in this library' + ((j.Next || []).length ? ' · <a href="#" class="hbAutoToggle" data-lib="' + esc(j.LibraryId) + '">' + (open ? 'Hide the list' : 'Show the next ' + j.Next.length) + '</a>' : '') + '</div>' + more + '</div><div class="hbActs">' + act + '</div></div>';
+                }
+                var running = j.Status === 'Running';
+                var liveJ = running && lastStatus && lastStatus.CurrentJobId === j.Id;
+                var pctJ = liveJ ? Math.max(0, Math.min(100, lastStatus.Progress || 0)) : 0;
+                var progJ;
+                if (running) {
+                    var leftJ = liveJ ? etaToSec(lastStatus.Eta) : null;
+                    progJ = liveJ ? pctJ.toFixed(1) + '%' + (leftJ != null ? ' · about ' + fmtLeft(leftJ) + ' left (done around ' + clockAt(leftJ) + ')' : '')
+                        + (lastStatus.Suspended ? ' · ' + (lastStatus.Paused ? 'paused' : 'suspended: streaming') : '') : 'Starting…';
+                } else {
+                    progJ = place;
+                    var autoBefore = queued.slice(0, pos).filter(function (x) { return x.Kind === 'auto' && x.Total > 0; });
+                    if (autoBefore.length) progJ += ' · behind ' + autoBefore.map(function (x) { return 'Automatic · ' + x.Title + ' (' + x.Total + ' files)'; }).join(', ') + ': move this up to run sooner';
+                    else if (runningAuto) progJ += ' · waiting for the automatic conversion of ' + baseName(runningAuto.File) + ' to finish';
+                    else if (pos === 0 && lastStatus && lastStatus.State === 'Waiting' && lastStatus.Message) progJ += ' · ' + lastStatus.Message;
+                }
+                var actJ = running ? '<button type="button" class="raised hbSmall hbStop" data-id="' + esc(j.Id) + '">Stop</button>' : moves;
+                var name = j.Title || (j.Path || '').split(/[\\/]/).pop();
+                return '<div class="hbItem" style="--p:' + pctJ + '%" title="' + esc(j.Path) + '"><label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbJobPick" data-id="' + esc(j.Id) + '"' + (picked[j.Id] ? ' checked' : '') + ' /><span></span></label>' +
+                    '<div class="hbBody"><div class="hbName">' + esc(name) + '</div><div class="hbProg">' + esc(progJ) + '</div><div class="hbFmt">' + esc(jobFormat(j)) + '</div></div><div class="hbActs">' + actJ + '</div></div>';
+            }).join('');
         }
+        function refreshQueue() { api('GET', 'Queue').then(function (jobs) { lastJobs = jobs; renderQueue(jobs); }); }
         function queueAction(path, body) { return api('POST', path, body).then(refreshQueue); }
         $('#hbQueue').addEventListener('click', function (e) {
+            var tg = e.target.closest('.hbAutoToggle');
+            if (tg) { e.preventDefault(); autoOpen[tg.getAttribute('data-lib')] = !autoOpen[tg.getAttribute('data-lib')]; renderQueue(lastJobs); return; }
+            if (e.target.closest('.hbStopAuto')) { api('POST', 'Queue/StopAutomatic').then(function () { setTimeout(refresh, 1500); }); return; }
             var m = e.target.closest('.hbMove'), st = e.target.closest('.hbStop');
             if (m) queueAction('Queue/' + m.getAttribute('data-id') + '/Move?to=' + m.getAttribute('data-to'));
             if (st) queueAction('Queue/Remove', { Ids: [st.getAttribute('data-id')] });

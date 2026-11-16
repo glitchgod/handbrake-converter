@@ -17,7 +17,7 @@ cat > dist/meta.json <<JSON
   "guid": "6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90",
   "name": "$NAME",
   "overview": "Re-encodes library videos with HandBrake on a schedule.",
-  "owner": "glitch",
+  "owner": "HandBrake Converter",
   "targetAbi": "12.1.0.0",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "version": "$VERSION",
@@ -35,7 +35,7 @@ cat > manifest.json <<JSON
     "name": "$NAME",
     "description": "Re-encodes library videos with HandBrake on a schedule.",
     "overview": "Re-encodes library videos with HandBrake on a schedule.",
-    "owner": "glitch",
+    "owner": "HandBrake Converter",
     "category": "General",
     "versions": [
       {

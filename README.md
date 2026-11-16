@@ -24,12 +24,15 @@ Save disk space and reduce transcoding on your server without babysitting a conv
 
 - **Auto-convert libraries**: switch conversion on per library, each with its own settings or the shared defaults.
 - **Convert by hand**: browse to one movie, an episode, a season or a whole series and queue just those.
-- **Control the result**: video encoder, quality, speed, resolution cap, H.264 compatibility level, audio (same as source, or AAC/AC3 as stereo or 5.1 surround), subtitles, container and HDR handling.
+- **Control the result**: video encoder, quality, speed, resolution cap, H.264 compatibility level, audio, subtitles, container and HDR handling.
+- **Clear audio choices**: each option is labelled by channel layout: same as source, AAC or AC3 as stereo (2 channels), or AAC or AC3 as 5.1 surround (6 channels). A stereo source is never upmixed.
+- **Tidy subtitles**: keep only the languages you list (3-letter codes, e.g. `eng`) plus forced tracks, so a file with dozens of subtitle tracks ends up with a few. Text subtitles are converted to SRT (or copied as-is where the container allows), which avoids the unusual formats that make some players fall back to transcoding. Picture subtitles (PGS/VobSub) are kept in MKV and dropped in MP4.
+- **Fix subtitles without re-encoding**: when a file was already converted, changing only the subtitle settings re-writes just the subtitle tracks with a fast stream copy. Video and audio are untouched, and the result is verified before it replaces the file.
 - **Run when it suits you**: weekly time windows, blackout dates, low CPU priority, and automatic pausing while someone is watching.
 - **Replace or keep**: overwrite the original in place (Jellyfin keeps the same item, metadata and watch history) or write a separate "- HandBrake" copy next to it. Optionally switch the file type too (MKV to MP4 or back). Jellyfin then sees a new item, so the plugin copies the watched status, resume position, favourites, rating, collections and "date added" across to it (best effort).
 - **Stay safe**: the result must finish cleanly, be smaller, and match the original's length, audio, subtitles, chapters and HDR before anything is swapped.
 - **Undo mistakes**: replaced originals are held for a number of days, then deleted, or restored with one click.
-- **Never repeat work**: a file already converted with the same settings is skipped and marked finished instead of being re-encoded.
+- **Never repeat work**: a file already converted with the same video settings is skipped and marked finished instead of being re-encoded.
 - **See what's happening**: live progress, time-left estimates, and a full history of what was converted, skipped or failed and why.
 - **Pick settings that work**: test which encoders your server really supports, and see which formats your clients actually transcode, read from Jellyfin's own logs.
 
@@ -37,10 +40,10 @@ Save disk space and reduce transcoding on your server without babysitting a conv
 
 | Tab | What it's for |
 |---|---|
-| **Overview** | Master on/off switch, Pause/Continue, what is converting right now, estimated time for everything waiting, space saved so far, and HandBrake status. |
+| **Overview** | Master on/off switch, Pause/Continue, what is converting right now (and whether it is a manual job or an automatic library), estimated time for everything waiting, space saved so far, and HandBrake status. |
 | **Libraries (auto-convert)** | One card per library: turn auto-convert on, optionally give it its own settings. Each card states in plain words what it will do right now. |
 | **Manual convert** | Search or browse your libraries, tick movies, episodes, seasons or series, choose settings, and add them to the queue. Can start immediately outside the schedule, or force a re-convert. |
-| **Queue** | What is converting and what is waiting, each with title, progress and target format. Reorder (Top / ▲ / ▼), stop the running job, remove several at once. |
+| **Queue** | One ordered list ("Order of work"). Manual jobs and each auto-convert library are rows in the same list, so you can put jobs in any order: manual, then a library, then more manual jobs, then another library. A library row shows the library name, the file it is on and how many are waiting, and expands to show the next files. Reorder (Top / ▲ / ▼), stop the running job, remove several at once. **Stop automatic & start now** ends the running automatic encode so your manual job begins immediately; the interrupted file is picked up again afterwards. |
 | **History** | Every converted, skipped and failed file with size before and after, time taken and the reason. Retry failures from here. |
 | **Default settings** | The shared video, audio, subtitle and file settings used by libraries and manual jobs unless overridden. |
 | **Original files** | What happens to originals: replace or keep, only-if-smaller, minimum saving, length / audio / subtitle / chapter checks, and how long replaced originals are held. Restore or delete held files here. |
@@ -50,7 +53,7 @@ Save disk space and reduce transcoding on your server without babysitting a conv
 
 ## 🧰 Set up HandBrake on your Jellyfin server
 
-The plugin drives **HandBrakeCLI** on the same machine that runs Jellyfin. These steps are for Ubuntu/Debian.
+The plugin drives **HandBrakeCLI** on the same machine that runs Jellyfin. Subtitle clean-up also uses **ffmpeg** (already present with Jellyfin). These steps are for Ubuntu/Debian.
 
 1. **Install it.** On the Jellyfin server:
    ```bash
@@ -71,7 +74,7 @@ The plugin drives **HandBrakeCLI** on the same machine that runs Jellyfin. These
 5. **Install the plugin** (see below) and restart Jellyfin.
 6. **Confirm detection.** Open the plugin, go to **HandBrake & tools**. It should say HandBrake is installed with the version. If not, type the full path (for example `/usr/bin/HandBrakeCLI`) into the path box.
 7. **Test your encoders.** Open **Encoder test** and press **Test all encoders**. Pick only encoders that pass. CPU encoders (x264, x265, SVT-AV1) work everywhere; NVENC, QSV and VAAPI need matching hardware and drivers on the server.
-8. **Choose settings.** In **Default settings** pick an encoder, quality and resolution. A good starting point is x265 with quality 22 and audio/subtitles on "Same as source".
+8. **Choose settings.** In **Default settings** pick an encoder, quality and resolution. A good starting point is x265 with quality 22, audio on "Same as source", and subtitles set to keep your language (`eng`) plus forced tracks.
 9. **Try one file first.** In **Manual convert** queue a single episode, watch it in the **Queue**, then check **History** and play the result before turning on auto-convert for a whole library.
 
 > Running Jellyfin in Docker? HandBrakeCLI has to exist inside that container. Use an image or mod that includes it, since packages installed by hand are lost when the container is rebuilt.
@@ -84,7 +87,7 @@ The plugin drives **HandBrakeCLI** on the same machine that runs Jellyfin. These
 4. Open **Catalog**, install **HandBrake Converter**, then restart Jellyfin from the Dashboard.
 5. Open **HandBrake Converter** in the dashboard sidebar.
 
-**Requirements:** Jellyfin 12.1 and HandBrakeCLI on the server. The plugin doesn't bundle HandBrake or ffmpeg.
+**Requirements:** Jellyfin 12.1, HandBrakeCLI and ffmpeg on the server. The plugin doesn't bundle either.
 
 ## 🛡️ How a file is protected
 
@@ -106,7 +109,7 @@ Jellyfin shows an update under **Dashboard → Plugins** when a newer release is
 <details>
 <summary><b>Building from source</b></summary>
 
-Needs the .NET 10 SDK. Run `./build.sh`; the plugin DLL and `meta.json` land in `dist/`. Releases are built automatically by the GitHub Action in `.github/workflows/release.yml` whenever `VERSION` is bumped.
+Needs the .NET 10 SDK. Run `./build.sh`; the plugin DLL and `meta.json` land in `dist/`. Releases are built automatically by the GitHub Action in `.github/workflows/release.yml` (it runs `make-release.sh`) whenever `VERSION` is bumped.
 
 </details>
 

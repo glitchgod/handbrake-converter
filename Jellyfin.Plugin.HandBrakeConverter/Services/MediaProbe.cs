@@ -14,7 +14,7 @@ namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 /// <summary>What ffprobe says about a video file.</summary>
 public sealed record MediaInfo(
     double Duration, int AudioTracks, int SubtitleTracks, int Chapters,
-    string VideoCodec, string PixelFormat, string Transfer, bool DolbyVision, int Height = 0)
+    string VideoCodec, string PixelFormat, string Transfer, bool DolbyVision, int Height = 0, System.Collections.Generic.IReadOnlyList<SubStream>? Subs = null)
 {
     /// <summary>HDR10 / PQ or HLG.</summary>
     public bool IsHdr => Transfer is "smpte2084" or "arib-std-b67";
@@ -44,6 +44,23 @@ public class MediaProbe
         catch { }
 
         return HandBrakeLocator.FindOnPath("ffprobe");
+    }
+
+    /// <summary>The ffmpeg Jellyfin itself uses (or one on the PATH); null when there is none.</summary>
+    /// <summary>Tests only: pretend there is no ffmpeg.</summary>
+    internal static bool NoFfmpeg;
+
+    public string? FfmpegPath()
+    {
+        if (NoFfmpeg) return null;
+        try
+        {
+            var p = _encoder.EncoderPath;
+            if (!string.IsNullOrWhiteSpace(p) && File.Exists(p)) return p;
+        }
+        catch { }
+
+        return HandBrakeLocator.FindOnPath("ffmpeg");
     }
 
     /// <summary>null when ffprobe is missing, fails, or the file has no readable duration.</summary>
@@ -95,8 +112,18 @@ public class MediaProbe
         var chapters = root.TryGetProperty("chapters", out var c) ? c.GetArrayLength() : 0;
         var isVideo = video.ValueKind == JsonValueKind.Object;
 
+        var subs = new System.Collections.Generic.List<SubStream>();
+        foreach (var st in streams.Where(x => Str(x, "codec_type") == "subtitle"))
+        {
+            string tag(string n) => st.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Object
+                ? tg.EnumerateObject().Where(pr => pr.Name.Equals(n, StringComparison.OrdinalIgnoreCase)).Select(pr => pr.Value.GetString() ?? string.Empty).FirstOrDefault() ?? string.Empty : string.Empty;
+            var forcedFlag = st.TryGetProperty("disposition", out var dd) && dd.TryGetProperty("forced", out var fv) && fv.ValueKind == JsonValueKind.Number && fv.GetInt32() == 1;
+            var title = tag("title");
+            subs.Add(new SubStream(subs.Count, Str(st, "codec_name"), tag("language").ToLowerInvariant(), forcedFlag || title.Contains("forced", StringComparison.OrdinalIgnoreCase), title));
+        }
+
         return new MediaInfo(seconds, Count("audio"), Count("subtitle"), chapters,
             isVideo ? Str(video, "codec_name") : string.Empty, isVideo ? Str(video, "pix_fmt") : string.Empty, isVideo ? Str(video, "color_transfer") : string.Empty, dolby,
-            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0);
+            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0, subs);
     }
 }

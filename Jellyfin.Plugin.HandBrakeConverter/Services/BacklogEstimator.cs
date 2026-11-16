@@ -60,7 +60,7 @@ public sealed class BacklogEstimator
         if (!cfg.Enabled) return new BacklogEta(0, 0, null);
 
         var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var j in _jobs.List().Where(j => j.Status == "Queued")) paths.Add(j.Path);
+        foreach (var j in _jobs.List().Where(j => j.Status == "Queued" && !j.IsAuto)) paths.Add(j.Path);
         foreach (var p in _backlog.FindPending(cfg, int.MaxValue)) paths.Add(p.Path);
         if (!string.IsNullOrEmpty(currentPath)) paths.Remove(currentPath);
 

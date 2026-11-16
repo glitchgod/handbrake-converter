@@ -11,7 +11,7 @@ using MediaBrowser.Controller.Library;
 namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 
 /// <summary>A file the auto-convert will pick up, with the profile of the library it lives in.</summary>
-public record Pending(string ItemId, string Path, ConversionProfile Profile, string Library);
+public record Pending(string ItemId, string Path, ConversionProfile Profile, string Library, string LibraryId = "");
 
 /// <summary>
 /// Finds unconverted files in libraries with Auto-convert on. The expensive library query is cached and only redone when Jellyfin
@@ -52,7 +52,7 @@ public sealed class BacklogScanner
         }
     }
 
-    public List<Pending> FindPending(PluginConfiguration cfg, int limit)
+    public List<Pending> FindPending(PluginConfiguration cfg, int limit, string? libraryId = null)
     {
         var sig = Signature(cfg);
         List<Pending>? list;
@@ -80,7 +80,7 @@ public sealed class BacklogScanner
 
         var maxFailures = Math.Max(1, cfg.MaxFailures);
         return list!
-            .Where(c => !_state.IsProcessed(c.ItemId, c.Path) && _state.FailureCount(c.Path) < maxFailures && File.Exists(c.Path))
+            .Where(c => (libraryId == null || c.LibraryId == libraryId) && !_state.IsProcessed(c.ItemId, c.Path) && _state.FailureCount(c.Path) < maxFailures && File.Exists(c.Path))
             .Take(limit)
             .ToList();
     }
@@ -127,7 +127,7 @@ public sealed class BacklogScanner
                 if (!profile.DeleteOriginal && System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(label, StringComparison.OrdinalIgnoreCase)) continue;
 
                 if (!File.Exists(path) || (minBytes > 0 && new FileInfo(path).Length < minBytes)) continue;
-                result.Add(new Pending(id, path, profile, lib.Name));
+                result.Add(new Pending(id, path, profile, lib.Name, lib.LibraryId));
             }
         }
 

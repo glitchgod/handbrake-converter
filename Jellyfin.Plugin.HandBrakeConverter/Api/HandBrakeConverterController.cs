@@ -103,6 +103,7 @@ public class HandBrakeConverterController : ControllerBase
             snap.Message,
             snap.CurrentFile,
             snap.CurrentJobId,
+            snap.Origin,
             snap.Progress,
             snap.Eta,
             EtaSeconds = BacklogEstimator.ParseEta(snap.Eta),
@@ -131,6 +132,10 @@ public class HandBrakeConverterController : ControllerBase
         var items = _backlog.FindPending(cfg, Math.Clamp(limit, 1, 500));
         return Ok(items.Select(i => new { i.Path, i.Library }));
     }
+
+    /// <summary>Stops the running automatic conversion so queued jobs can start (the automatic one resumes afterwards).</summary>
+    [HttpPost("Queue/StopAutomatic")]
+    public ActionResult StopAutomatic() => Ok(new { Stopped = _service.StopAutomatic() });
 
     /// <summary>
     /// Browse for the Convert tab. With libraryId: the movies and series in that library (optional search).
@@ -215,26 +220,49 @@ public class HandBrakeConverterController : ControllerBase
     }
 
     [HttpGet("Queue")]
-    public ActionResult GetQueue() =>
-        Ok(_jobs.List().Where(j => j.Status is "Running" or "Queued").Select(j => new
-        {
-            j.Id,
-            j.Title,
-            j.Path,
-            j.Status,
-            j.Error,
-            j.IgnoreSchedule,
-            DeleteOriginal = j.Profile.DeleteOriginal,
-            Encoder = j.Profile.HandBrake.Encoder,
-            Subtitles = j.Profile.HandBrake.SubtitleMode,
-            MaxHeight = j.Profile.HandBrake.MaxHeight,
-            Container = ConversionService.ResolveContainer(j.Profile, j.Path).Extension.TrimStart('.').ToUpperInvariant(),
-            Suffix = j.Profile.GetLabel(),
-            j.Force,
-            NewItem = ConversionService.ChangesExtension(j.Profile, j.Path),
-            j.Added,
-            j.Finished
-        }));
+    public ActionResult GetQueue()
+    {
+        var cfg = Plugin.Instance!.Configuration;
+        _service.SyncAutoEntries(cfg);
+        var snap = _service.Snapshot();
+        var pending = _backlog.FindPending(cfg, int.MaxValue).GroupBy(p => p.LibraryId).ToDictionary(g => g.Key, g => g.ToList());
+        var autoRunning = snap.CurrentFile.Length > 0 && snap.CurrentJobId.Length == 0;
+        return Ok(_jobs.List().Where(j => j.Status is "Running" or "Queued").Select(j => j.IsAuto
+            ? (object)new
+            {
+                j.Id,
+                Kind = "auto",
+                j.Title,
+                j.LibraryId,
+                Status = "Queued",
+                Running = autoRunning && snap.Origin == j.Title,
+                File = autoRunning && snap.Origin == j.Title ? snap.CurrentFile : string.Empty,
+                Total = pending.TryGetValue(j.LibraryId, out var l) ? l.Count : 0,
+                Next = (pending.TryGetValue(j.LibraryId, out var l2) ? l2 : new List<Pending>()).Take(25).Select(i => i.Path).ToList()
+            }
+            : new
+            {
+                j.Id,
+                Kind = "",
+                j.Title,
+                j.Path,
+                j.Status,
+                j.Error,
+                j.IgnoreSchedule,
+                DeleteOriginal = j.Profile.DeleteOriginal,
+                Encoder = j.Profile.HandBrake.Encoder,
+                Subtitles = j.Profile.HandBrake.SubtitleMode,
+                SubtitleLanguages = j.Profile.HandBrake.SubtitleLanguages,
+                SubtitleKeepForced = j.Profile.HandBrake.SubtitleKeepForced,
+                MaxHeight = j.Profile.HandBrake.MaxHeight,
+                Container = ConversionService.ResolveContainer(j.Profile, j.Path).Extension.TrimStart('.').ToUpperInvariant(),
+                Suffix = j.Profile.GetLabel(),
+                j.Force,
+                NewItem = ConversionService.ChangesExtension(j.Profile, j.Path),
+                j.Added,
+                j.Finished
+            }));
+    }
 
     /// <summary>up | down | top | bottom, for a queued job.</summary>
     [HttpPost("Queue/{id}/Move")]

@@ -22,6 +22,14 @@ public class Job
     /// <summary>true = convert even if this file was already converted with the same settings.</summary>
     public bool Force { get; set; }
 
+    /// <summary>"" = a manual job. "auto" = the place of one library's Auto-convert backlog in the queue order (not a conversion itself).</summary>
+    public string Kind { get; set; } = string.Empty;
+
+    /// <summary>For Kind "auto": the library this entry stands for.</summary>
+    public string LibraryId { get; set; } = string.Empty;
+
+    public bool IsAuto => Kind == "auto";
+
     /// <summary>Queued | Running | Done | Skipped | Failed | Cancelled</summary>
     public string Status { get; set; } = "Queued";
 
@@ -79,8 +87,10 @@ public class JobStore
         {
             foreach (var j in jobs)
             {
-                if (_jobs.Any(x => x.Path == j.Path && x.Status is "Queued" or "Running")) { skipped++; continue; }
-                _jobs.Add(j);
+                if (_jobs.Any(x => !x.IsAuto && x.Path == j.Path && x.Status is "Queued" or "Running")) { skipped++; continue; }
+                // New jobs go in front of the first Auto-convert entry, so queued jobs still run before Auto-convert unless it was moved up.
+                var firstAuto = _jobs.FindIndex(x => x.IsAuto);
+                if (firstAuto >= 0) _jobs.Insert(firstAuto, j); else _jobs.Add(j);
                 added++;
             }
 
@@ -90,10 +100,38 @@ public class JobStore
         return (added, skipped);
     }
 
-    /// <summary>First queued job the caller says may run now.</summary>
+    /// <summary>First queued manual job the caller says may run now.</summary>
     public Job? Next(Func<Job, bool> allowed)
     {
-        lock (_lock) return _jobs.FirstOrDefault(j => j.Status == "Queued" && allowed(j));
+        lock (_lock) return _jobs.FirstOrDefault(j => j.Status == "Queued" && !j.IsAuto && allowed(j));
+    }
+
+    /// <summary>The queue in run order: manual jobs and the Auto-convert entries, one after the other.</summary>
+    public List<Job> Entries()
+    {
+        lock (_lock) return _jobs.Where(j => j.Status == "Queued").ToList();
+    }
+
+    /// <summary>
+    /// Keeps one Auto-convert entry per library that has files waiting: new ones go to the end, ones whose library has nothing left
+    /// (or Auto-convert switched off) are dropped. Where an entry sits in the order is the user's choice and is kept.
+    /// </summary>
+    public void SyncAuto(IReadOnlyList<(string LibraryId, string Name)> withPending)
+    {
+        lock (_lock)
+        {
+            var changed = false;
+            var ids = withPending.Select(p => p.LibraryId).ToHashSet();
+            foreach (var e in _jobs.Where(j => j.IsAuto && !ids.Contains(j.LibraryId)).ToList()) { _jobs.Remove(e); changed = true; }
+            foreach (var (id, name) in withPending)
+            {
+                var e = _jobs.FirstOrDefault(j => j.IsAuto && j.LibraryId == id);
+                if (e == null) { _jobs.Add(new Job { Kind = "auto", LibraryId = id, Title = name, Status = "Queued" }); changed = true; }
+                else if (e.Title != name) { e.Title = name; changed = true; }
+            }
+
+            if (changed) Save();
+        }
     }
 
     public void SetStatus(string id, string status, string error = "")
@@ -179,7 +217,7 @@ public class JobStore
         var n = 0;
         lock (_lock)
         {
-            foreach (var j in _jobs.Where(j => set.Contains(j.Id)).ToList())
+            foreach (var j in _jobs.Where(j => set.Contains(j.Id) && !j.IsAuto).ToList())
             {
                 if (j.Status == "Running") _cancel.Add(j.Id);
                 else _jobs.Remove(j);
@@ -196,6 +234,6 @@ public class JobStore
 
     public int QueuedCount()
     {
-        lock (_lock) return _jobs.Count(j => j.Status == "Queued");
+        lock (_lock) return _jobs.Count(j => j.Status == "Queued" && !j.IsAuto);
     }
 }

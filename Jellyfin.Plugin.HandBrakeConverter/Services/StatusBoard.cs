@@ -9,6 +9,9 @@ public sealed class ConversionStatus
     public string Message { get; set; } = string.Empty;
     public string CurrentFile { get; set; } = string.Empty;
     public string CurrentJobId { get; set; } = string.Empty;
+
+    /// <summary>"queue" for a queued job, otherwise the name of the library the automatic conversion is working through.</summary>
+    public string Origin { get; set; } = string.Empty;
     public double Progress { get; set; }
     public string Eta { get; set; } = string.Empty;
 
@@ -25,6 +28,7 @@ public sealed class ConversionStatus
     {
         CurrentFile = string.Empty;
         CurrentJobId = string.Empty;
+        Origin = string.Empty;
         Progress = 0;
         Eta = string.Empty;
         Suspended = false;

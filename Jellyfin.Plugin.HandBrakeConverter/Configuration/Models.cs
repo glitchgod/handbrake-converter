@@ -43,6 +43,18 @@ public class HandBrakeSettings
     /// <summary>keep (same as source: all tracks) | none | burn (burn one track into the video, drop the rest).</summary>
     public string SubtitleMode { get; set; } = "keep";
 
+    /// <summary>
+    /// Subtitle mode "keep" only: the languages to keep, comma separated (eng, spa). Empty = keep every language. Tracks in other
+    /// languages are dropped (see SubtitleKeepForced).
+    /// </summary>
+    public string SubtitleLanguages { get; set; } = "eng";
+
+    /// <summary>Keep tracks marked as forced (translations of foreign-language lines) even when their language is not listed.</summary>
+    public bool SubtitleKeepForced { get; set; } = true;
+
+    /// <summary>srt = turn text subtitles (ASS, MOV_TEXT...) into SRT, which Roku and nearly every player show without re-encoding the video | asis = leave them as they are.</summary>
+    public string SubtitleFormat { get; set; } = "srt";
+
     /// <summary>ISO 639-2 language (eng, jpn...) used to pick the track to burn when BurnTrack is 0.</summary>
     public string BurnLanguage { get; set; } = "eng";
 

@@ -25,7 +25,7 @@ public static class HandBrakeArgs
         enc.StartsWith("x264", StringComparison.Ordinal) || enc.StartsWith("x265", StringComparison.Ordinal) || enc.StartsWith("svt_av1", StringComparison.Ordinal);
 
     /// <summary>Builds the argument list (not a shell string) for HandBrakeCLI.</summary>
-    public static List<string> Build(HandBrakeSettings s, string input, string output)
+    public static List<string> Build(HandBrakeSettings s, string input, string output, bool noSubtitles = false)
     {
         var a = new List<string> { "-i", input, "-o", output };
         var mp4 = Extension(s) == ".mp4";
@@ -65,7 +65,7 @@ public static class HandBrakeArgs
         {
             case "burn": AddBurn(a, s); break;
             case "none": break;
-            default: a.Add("--all-subtitles"); break;
+            default: if (!noSubtitles) a.Add("--all-subtitles"); break; // noSubtitles: ffmpeg adds the chosen tracks afterwards
         }
 
         if (!string.IsNullOrWhiteSpace(s.ExtraArgs))
