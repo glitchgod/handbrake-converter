@@ -1,1 +1,1 @@
-Subtitles: keep only chosen languages plus forced tracks, convert text subtitles to SRT, and fix subtitles alone on already-converted files without re-encoding the video. Queue: each Auto-convert library is one row in the ordered list so manual jobs and automatic libraries can be mixed in any order, plus a Stop automatic and start now button.
+Removing an item from the Jellyfin library while it converts now stops the conversion and removes what it made, same as deleting the file.

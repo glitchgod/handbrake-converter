@@ -25,7 +25,9 @@ public static class HandBrakeArgs
         enc.StartsWith("x264", StringComparison.Ordinal) || enc.StartsWith("x265", StringComparison.Ordinal) || enc.StartsWith("svt_av1", StringComparison.Ordinal);
 
     /// <summary>Builds the argument list (not a shell string) for HandBrakeCLI.</summary>
-    public static List<string> Build(HandBrakeSettings s, string input, string output, bool noSubtitles = false)
+    /// <param name="audioTracks">1-based audio tracks to keep, or null for all of them.</param>
+    /// <param name="deinterlace">remove combing (the source is interlaced).</param>
+    public static List<string> Build(HandBrakeSettings s, string input, string output, bool noSubtitles = false, int[]? audioTracks = null, bool deinterlace = false)
     {
         var a = new List<string> { "-i", input, "-o", output };
         var mp4 = Extension(s) == ".mp4";
@@ -44,7 +46,8 @@ public static class HandBrakeArgs
             a.Add("--encoder-level"); a.Add(lvl);
         }
 
-        a.Add("--all-audio");
+        if (audioTracks is { Length: > 0 }) { a.Add("--audio"); a.Add(string.Join(",", audioTracks.Select(N))); }
+        else a.Add("--all-audio");
         switch (s.AudioMode)
         {
             // Stereo modes: every track is mixed down to 2 channels (a mono track stays mono).
@@ -54,12 +57,17 @@ public static class HandBrakeArgs
             // because HandBrake's own default for 5.1 is low (AC3 224 kbps, AAC ~195 kbps).
             case "aac_51": a.Add("--aencoder"); a.Add("av_aac"); a.Add("--mixdown"); a.Add("5point1"); a.Add("-B"); a.Add("384"); break;
             case "ac3_51": a.Add("--aencoder"); a.Add("ac3"); a.Add("--mixdown"); a.Add("5point1"); a.Add("-B"); a.Add("448"); break;
+            // AC3 cannot carry more than 5.1, so 7.1 is AAC only. 5.1 tracks stay 5.1 and stereo stays stereo (nothing is upmixed).
+            case "aac_71": a.Add("--aencoder"); a.Add("av_aac"); a.Add("--mixdown"); a.Add("7point1"); a.Add("-B"); a.Add("640"); break;
             default: a.Add("--aencoder"); a.Add("copy"); break;
         }
 
         // --maxHeight alone makes HandBrake keep the source width and store non-square pixels (1280x480 with a 2:3 pixel
         // aspect), which many players mishandle. --non-anamorphic forces square pixels, so 720p -> 854x480.
         if (s.MaxHeight > 0) { a.Add("--maxHeight"); a.Add(N(s.MaxHeight)); a.Add("--non-anamorphic"); }
+
+        // comb-detect + decomb only touches frames that really show combing, so progressive frames in the same file are left alone.
+        if (deinterlace || s.Deinterlace == "always") { a.Add("--comb-detect"); a.Add("--decomb"); }
 
         switch (s.SubtitleMode)
         {

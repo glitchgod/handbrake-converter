@@ -72,7 +72,9 @@
                     <div id="hbWaiting" class="fieldDescription"></div>
                     <div id="hbStats" class="fieldDescription"></div>
                     <button is="emby-button" type="button" class="raised" id="hbPauseBtn"><span>Pause</span></button>
+                    <button is="emby-button" type="button" class="raised" id="hbDryBtn"><span>Preview what would be converted</span></button>
                     <span id="hbPauseNote" class="fieldDescription"></span>
+                    <div id="hbDry" style="display:none;margin-top:1em"></div>
                 </div>
                 <div class="hbPanel">
                 <div class="checkboxContainer checkboxContainer-withDescription">
@@ -86,6 +88,11 @@
             <div class="hbTab" data-tab="libraries" style="display:none">
                 <div class="fieldDescription">Choose which of your libraries are converted automatically in the background, and optionally give a library its own conversion settings. Each library is a card below; remember to press Save.</div>
                 <div id="hbLibs">Loading libraries…</div>
+                <div class="verticalSection">
+                    <h2 class="sectionTitle">Never auto-convert these</h2>
+                    <div class="fieldDescription">Movies, series, seasons or episodes you excluded (use the Exclude button in Manual convert). Auto-convert skips everything inside them. You can still convert them by hand.</div>
+                    <div id="hbExcluded" class="fieldDescription">None.</div>
+                </div>
             </div>
 
             <!-- ============ MANUAL CONVERT ============ -->
@@ -216,6 +223,15 @@
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="SkipIfNotSmaller" /><span>Only accept the converted file if it is smaller than the original</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Skipped for manual conversions that keep the original or burn in subtitles, since those are deliberate.</div>
                     </div>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="LinkedFiles">Files that are hard-linked or symbolic links</label>
+                        <select is="emby-select" id="LinkedFiles" class="emby-select-withcolor emby-select">
+                            <option value="inplace">Replace in place: every link gets the converted video (suggested)</option>
+                            <option value="normal">Replace only the library's file (other links keep the old video)</option>
+                            <option value="skip">Leave them alone</option>
+                        </select>
+                        <div class="fieldDescription">A hard link is one file with two names, for example a library file shared with a download folder. In place writes the converted video into that one file, so both names shrink and no space is wasted; the downside is that the other name (a torrent still seeding it, say) no longer matches its original. It needs room for a temporary copy of the old file while it writes, and the old file is held for your "keep replaced originals" days as a real copy. Does not apply when you keep the original, or when the file type changes (that makes a new file).</div>
+                    </div>
                     <div class="hbTogWrap" id="hbSavingsWrap">
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="10" /><span>…and require a minimum saving</span></label>
@@ -241,7 +257,7 @@
                     <div class="hbTogWrap">
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="hbTog" data-def="7" /><span>Keep replaced originals so you can undo</span></label>
-                            <div class="fieldDescription checkboxFieldDescription">Off = the old file is deleted right away (no undo). On = it is held, then deleted automatically after the number of days below.</div>
+                            <div class="fieldDescription checkboxFieldDescription">Off = the old file is deleted right away (no undo). On = it is held, then deleted automatically after the number of days below. Either way, subtitle files that sat next to the old file (such as Name.eng.srt) are deleted together with it, but only those in a language the converted video still has; any other subtitle file is left alone.</div>
                         </div>
                         <div class="hbTogBody hbSub" style="display:none">
                             <div class="inputContainer">
@@ -312,6 +328,16 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="LowPriority" /><span>Run in the background at low priority</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Gives other programs on the server (including Jellyfin streaming) first call on the CPU, so the server stays responsive. Conversions take a little longer when the server is busy. Recommended.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="ParallelJobs">Conversions at the same time (1 to 4)</label>
+                        <input is="emby-input" type="number" id="ParallelJobs" min="1" max="4" />
+                        <div class="fieldDescription">Leave at 1 unless the server has plenty of spare CPU and fast disks: each extra conversion shares the same processor, memory and disk, so on an older machine two at once is usually slower overall and can make streaming stutter. The free-space check counts every conversion that is running.</div>
+                    </div>
+                    <div class="inputContainer">
+                        <label class="inputLabel inputLabelUnfocused" for="StallMinutes">Stop an encode that prints nothing for (minutes, 0 = never)</label>
+                        <input is="emby-input" type="number" id="StallMinutes" min="0" />
+                        <div class="fieldDescription">If HandBrake goes completely silent for this long it is treated as frozen: it is stopped and recorded as failed (the original is untouched) so the queue can carry on. Time spent paused or waiting for viewers does not count.</div>
                     </div>
                     </div>
                 </div>
@@ -477,8 +503,9 @@
                         'HDR and Dolby Vision videos look washed out if re-encoded the usual way. Leave them alone skips those files. Convert and keep HDR re-encodes in 10-bit, keeps the HDR information and checks it survived (Dolby Vision is always left alone). The last option converts them regardless.') +
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">Audio</h2>' + desc('What happens to the sound tracks.') +
-                    sel('hb.AudioMode', 'Audio', S([['copy', 'Same as source (copy all tracks, keeps surround)'], ['aac_51', 'AAC, 5.1 surround kept (up to 6 channels)'], ['ac3_51', 'AC3, 5.1 surround kept (up to 6 channels)'], ['aac', 'AAC, stereo only (2 channels)'], ['ac3', 'AC3, stereo only (2 channels)']], 'copy', 'hb.AudioMode'), h.AudioMode || 'copy', 'Same as source keeps every audio track untouched. The 5.1 options keep surround tracks as 6 channels (stereo tracks stay stereo). The stereo-only options mix every track down to 2 channels, which is smaller but loses surround.') +
-                    num('hb.AudioBitrate', 'Bitrate (kbps), stereo conversion only', h.AudioBitrate == null ? 160 : h.AudioBitrate, 32, 'Used by the stereo-only options; 128–192 is typical. The 5.1 options use their own fixed bitrate (AAC 384, AC3 448). Ignored when the audio is copied.') +
+                    sel('hb.AudioMode', 'Audio', S([['copy', 'Same as source (copy all tracks, keeps surround)'], ['aac_71', 'AAC, 7.1 surround kept (up to 8 channels)'], ['aac_51', 'AAC, 5.1 surround kept (up to 6 channels)'], ['ac3_51', 'AC3, 5.1 surround kept (up to 6 channels)'], ['aac', 'AAC, stereo only (2 channels)'], ['ac3', 'AC3, stereo only (2 channels)']], 'copy', 'hb.AudioMode'), h.AudioMode || 'copy', 'Same as source keeps every audio track untouched, including Dolby Atmos, TrueHD and DTS-HD (re-encoding cannot keep Atmos, so choose this to keep it). The 7.1 and 5.1 options keep surround tracks at that many channels and never add channels to a smaller track (AC3 cannot do 7.1, so 7.1 is AAC only). The stereo-only options mix every track down to 2 channels, which is smaller but loses surround.') +
+                    txt('hb.AudioLanguages', 'Audio languages to keep (3-letter codes, e.g. eng or eng, jpn; empty = keep every track)', h.AudioLanguages || '', 'Removes the other audio tracks (extra languages, commentary), which saves space. Tracks with no language tag are always kept, and if no track matches nothing is removed. Changing this re-converts files that were done before.') +
+                    num('hb.AudioBitrate', 'Bitrate (kbps), stereo conversion only', h.AudioBitrate == null ? 160 : h.AudioBitrate, 32, 'Used by the stereo-only options; 128–192 is typical. The surround options use their own fixed bitrate (AAC 7.1 640, AAC 5.1 384, AC3 5.1 448). Ignored when the audio is copied.') +
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">Subtitles</h2>' + desc('What happens to the subtitle tracks.') +
                     sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Same as source (keep all tracks)'], ['none', 'Remove all subtitles'], ['burn', 'Burn one track into the video']], 'keep'), h.SubtitleMode || 'keep',
@@ -488,6 +515,8 @@
                         chk('hb.SubtitleKeepForced', 'Also keep forced tracks (subtitles for foreign-language scenes)', h.SubtitleKeepForced !== false, 'Forced tracks are the short subtitles that appear only when characters speak another language (for example Spanish lines in an English show). They are kept even if their language is not in the list above.') +
                         sel('hb.SubtitleFormat', 'Text subtitle format', [['srt', 'SRT: plays on Roku and nearly everything without re-encoding the video'], ['asis', 'Leave as they are (ASS, MOV_TEXT…)']], h.SubtitleFormat || 'srt',
                             'ASS and MOV_TEXT subtitles often make a player (Roku in particular) ask Jellyfin to burn them into a re-encoded video, which looks bad. SRT avoids that. Picture subtitles (PGS, VobSub) cannot be converted and are kept as they are in MKV (MP4 cannot hold them). SRT conversion needs MKV; in MP4 the format MP4 uses (MOV_TEXT) is the only text format.') +
+                        sel('hb.SubtitleExternal', 'Separate subtitle files', [['off', 'No: keep subtitles inside the video file'], ['also', 'Also write each text track as a separate .srt file'], ['only', 'Write separate .srt files and remove them from the video file']], h.SubtitleExternal || 'off',
+                            'Separate files (for example Name.eng.srt and Name.spa.forced.srt) sit next to the video and are the most reliable option for players such as Roku. Picture subtitles (PGS, VobSub) cannot be written as text and always stay inside the file. An existing subtitle file with the same name is never overwritten.') +
                     '</div>' +
                     '<div class="hbBurn hbSub" style="display:' + (burn ? 'block' : 'none') + ';">' +
                         '<div class="hbBurnLang" style="display:' + (h.BurnTrack > 0 ? 'none' : 'block') + ';">' + txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') + '</div>' +
@@ -496,6 +525,7 @@
                     '</div>' +
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">File</h2>' + desc('Which file format to use and what happens to the original file.') +
+                    sel('hb.Deinterlace', 'Interlaced video', S([['auto', 'Clean up only videos that are interlaced'], ['always', 'Always clean up'], ['off', 'Never']], 'auto', 'hb.Deinterlace'), h.Deinterlace || 'auto', 'DVDs and TV recordings are often interlaced, which shows as jagged "combing" on moving edges and becomes permanent once converted. Auto looks at each file and, when it is interlaced, removes combing only from the frames that show it. Progressive video is never touched.') +
                     sel('hb.Container', 'Container', S([['source', 'Same as source'], ['mkv', 'MKV'], ['mp4', 'MP4']], 'source'), h.Container || 'source',
                         '"Same as source" keeps MKV as MKV and MP4 as MP4. Other formats (AVI, TS…) become MKV. When an original is replaced, its file name and container normally stay the same, so Jellyfin keeps your watch history (see the option below to change that).') +
                     sel('p.DeleteOriginal', 'Original file', S([['keep', 'Keep it, and save the converted file next to it'], ['replace', 'Replace it with the converted file']], 'replace'), p.DeleteOriginal ? 'replace' : 'keep',
@@ -682,6 +712,17 @@
         }
 
         // ---------------------------------------------------------------- convert tab
+        function loadExcluded() {
+            api('GET', 'Excluded').then(function (list) {
+                var el = $('#hbExcluded');
+                if (!list.length) { el.textContent = 'None.'; return; }
+                el.innerHTML = list.map(function (x) { return '<div class="hbRow"><div class="grow">' + esc(x.Name || x.ItemId) + '</div><button type="button" class="raised hbSmall hbExcDel" data-id="' + esc(x.ItemId) + '">Remove</button></div>'; }).join('');
+            }, function () { });
+        }
+        $('#hbExcluded').addEventListener('click', function (e) {
+            var b = e.target.closest('.hbExcDel'); if (!b) return;
+            api('POST', 'Excluded/Toggle?id=' + b.getAttribute('data-id')).then(function () { loadExcluded(); if (conv.libId) browse(); });
+        });
         function fillConvLibs() {
             var el = $('#hbConvLib');
             el.innerHTML = '<option value="">— Pick library —</option>' + visibleFolders().map(function (f) { return '<option value="' + esc(f.ItemId) + '">' + esc(f.Name) + '</option>'; }).join('');
@@ -710,8 +751,9 @@
                 list.innerHTML = items.map(function (i) {
                     var label = (i.Kind === 'Episode' && i.Index != null ? i.Index + '. ' : '') + i.Name + (i.Year ? ' (' + i.Year + ')' : '');
                     var drill = (i.Kind === 'Series' || i.Kind === 'Season');
-                    return '<div class="hbRow"><div class="checkboxContainer grow" style="margin-bottom:0">' + box('hbPick', 'data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '"', conv.selected[i.Id], label) + '</div><span class="hbBadge">' + esc(i.Kind) + '</span>' +
+                    return '<div class="hbRow"><div class="checkboxContainer grow" style="margin-bottom:0">' + box('hbPick', 'data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '"', conv.selected[i.Id], label) + '</div><span class="hbBadge">' + esc(i.Kind) + '</span>' + (i.Excluded ? '<span class="hbBadge Skipped" title="Auto-convert never touches this">' + (i.ExcludedDirect ? 'Excluded from auto-convert' : 'Excluded (parent)') + '</span>' : '') +
                         (drill ? '<button type="button" class="raised hbSmall hbOpen" data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '">Open</button>' : '') +
+                        (i.Excluded && !i.ExcludedDirect ? '' : '<button type="button" class="raised hbSmall hbExc" data-id="' + esc(i.Id) + '">' + (i.ExcludedDirect ? 'Include again' : 'Exclude') + '</button>') +
                         '<button type="button" class="raised hbSmall hbOne" data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '">Convert…</button></div>';
                 }).join('');
                 updateSelCount();
@@ -730,7 +772,8 @@
         $('#hbConvGo').addEventListener('click', function () { conv.stack = []; browse(); });
         $('#hbConvLib').addEventListener('change', function () { conv.stack = []; conv.libId = ''; browse(); });
         $('#hbConvList').addEventListener('click', function (e) {
-            var o = e.target.closest('.hbOpen'), one = e.target.closest('.hbOne');
+            var o = e.target.closest('.hbOpen'), one = e.target.closest('.hbOne'), exc = e.target.closest('.hbExc');
+            if (exc) { api('POST', 'Excluded/Toggle?id=' + exc.getAttribute('data-id')).then(function () { browse(); loadExcluded(); }, function (x) { errText(x, 'Could not change the exclusion.').then(function (t) { exc.textContent = t; }); }); return; }
             if (o) { conv.stack.push({ id: o.getAttribute('data-id'), name: o.getAttribute('data-name') }); browse(); }
             if (one) { var id = one.getAttribute('data-id'); conv.names[id] = one.getAttribute('data-name'); openOptions([id]); }
         });
@@ -872,7 +915,7 @@
                 if (h.Result === 'Converted') lines.push('<div class="hbProg">' + esc(h.Detail) + '</div>');
                 if (h.Encoder) {
                     var subs = h.Subtitles === 'none' ? 'subtitles removed' : h.Subtitles === 'burn' ? 'subtitles burned in' : 'subtitles kept';
-                    var AUD = {aac: 'AAC stereo', ac3: 'AC3 stereo', aac_51: 'AAC 5.1', ac3_51: 'AC3 5.1'};
+                    var AUD = {aac: 'AAC stereo', ac3: 'AC3 stereo', aac_51: 'AAC 5.1', ac3_51: 'AC3 5.1', aac_71: 'AAC 7.1'};
                     var audio = h.Audio === 'copy' ? 'audio copied' : 'audio ' + (AUD[h.Audio] || h.Audio);
                     lines.push('<div class="hbFmt">Settings: ' + esc([ENC_LABELS[h.Encoder] || h.Encoder, 'quality ' + h.Quality, h.Preset, h.Container, h.MaxHeight ? h.MaxHeight + 'p max' : 'same resolution', audio, subs].filter(Boolean).join(' · ')) + '</div>');
                 }
@@ -991,6 +1034,7 @@
                     else if (s.EtaSeconds != null) line += ' — about ' + fmtLeft(s.EtaSeconds) + ' left (done around ' + clockAt(s.EtaSeconds) + ')';
                     else if (s.Eta) line += ' — ETA ' + esc(s.Eta);
                 }
+                (s.Also || []).forEach(function (a) { line += '<br>Also converting: ' + esc(a.CurrentFile) + ' — ' + (a.Progress || 0).toFixed(1) + '%' + (a.Suspended ? ' (on hold)' : ''); });
                 $('#hbStatus').innerHTML = line + '<br>' + hbLine;
                 $('#hbBar').style.width = Math.min(100, s.Progress || 0) + '%';
                 var w = s.Waiting || {}, wt = '';
@@ -1007,6 +1051,21 @@
                 if (activeTab === 'history') refreshHistory();
             }, function () { $('#hbStatus').textContent = 'Status unavailable.'; });
         }
+        $('#hbDryBtn').addEventListener('click', function () {
+            var box = $('#hbDry'); box.style.display = 'block'; box.textContent = 'Working it out (nothing is changed)…';
+            api('GET', 'DryRun').then(function (d) {
+                var saved = d.Bytes - d.EstBytes;
+                var h = '<div class="fieldDescription"><b>Preview only: no file has been touched.</b>' + (d.Enabled ? '' : ' (HandBrake Converter is switched off, so none of this will run until you enable it.)') + '</div>';
+                h += '<div>' + d.Files + ' file(s) waiting in Auto-convert libraries (' + fmtBytes(d.Bytes) + '), estimated ' + fmtBytes(d.EstBytes) + ' afterwards: about <b>' + fmtBytes(Math.max(0, saved)) + ' saved</b>.';
+                if (d.EstSeconds) h += ' Rough time: ' + (d.EstSeconds > 7200 ? Math.round(d.EstSeconds / 3600) + ' hours' : Math.round(d.EstSeconds / 60) + ' minutes') + '.';
+                h += '</div><div class="fieldDescription">Saving guessed from ' + esc(d.Basis) + '.</div>';
+                if (d.Manual.Files) h += '<div class="fieldDescription">Plus ' + d.Manual.Files + ' file(s) in your manual queue (' + fmtBytes(d.Manual.Bytes) + ').</div>';
+                if (d.Excluded) h += '<div class="fieldDescription">' + d.Excluded + ' item(s) are excluded and not counted.</div>';
+                if (d.Libraries.length) h += '<ul>' + d.Libraries.map(function (l) { return '<li>' + esc(l.Name) + ': ' + l.Files + ' file(s), ' + fmtBytes(l.Bytes) + ' → about ' + fmtBytes(l.EstBytes) + '</li>'; }).join('') + '</ul>';
+                if (d.Sample.length) h += '<div class="fieldDescription">First ' + d.Sample.length + ' files in order' + (d.More ? ' (+' + d.More + ' more)' : '') + ':</div><div>' + d.Sample.map(function (f) { return '<div class="hbFmt">' + esc(f.Name) + ' · ' + fmtBytes(f.Size) + ' → ~' + fmtBytes(f.Est) + (f.Note ? ' · ' + esc(f.Note) : '') + '</div>'; }).join('') + '</div>';
+                box.innerHTML = h;
+            }, function () { box.textContent = 'Could not work it out.'; });
+        });
         $('#hbPauseBtn').addEventListener('click', function () {
             api('POST', lastStatus && lastStatus.Paused ? 'Resume' : 'Pause').then(refresh);
         });
@@ -1036,6 +1095,9 @@
                 $('#MinSizeMb').value = cfg.MinSizeMb || 0;
                 $('#KeepReplacedDays').value = cfg.KeepReplacedDays == null ? 7 : cfg.KeepReplacedDays;
                 $('#WindowEndMode').value = cfg.FinishCurrentAfterWindow === false ? 'stop' : 'finish';
+                $('#LinkedFiles').value = cfg.LinkedFiles || 'inplace';
+                $('#ParallelJobs').value = cfg.ParallelJobs || 1;
+                $('#StallMinutes').value = cfg.StallMinutes == null ? 30 : cfg.StallMinutes;
                 $('#hbScheduleBody').style.display = cfg.ScheduleEnabled ? 'block' : 'none';
                 $('#MinFreeSpaceGb').value = cfg.MinFreeSpaceGb == null ? 2 : cfg.MinFreeSpaceGb;
                 $('#TrashFolder').value = cfg.TrashFolder || '';
@@ -1044,6 +1106,7 @@
                 renderEncoders();
                 $('#hbDefaults').innerHTML = profileHtml(cfg.Defaults);
                 renderLibraries();
+                loadExcluded();
                 refreshLibSummaries();
                 fillConvLibs();
                 renderWindows(cfg.Windows || []);
@@ -1058,6 +1121,9 @@
                 BOOLS.forEach(function (k) { c[k] = $('#' + k).checked; });
                 c.HandBrakePath = $('#HandBrakePath').value.trim();
                 c.MaxFailures = parseInt($('#MaxFailures').value || '2', 10) || 2;
+                c.LinkedFiles = $('#LinkedFiles').value;
+                c.ParallelJobs = intOf('ParallelJobs', 1, 1, 4);
+                c.StallMinutes = intOf('StallMinutes', 30, 0);
                 c.MinSavingsPercent = intOf('MinSavingsPercent', 0, 0, 95);
                 c.MinFreeSpaceGb = intOf('MinFreeSpaceGb', 2, 0);
                 c.MinSizeMb = intOf('MinSizeMb', 0, 0);

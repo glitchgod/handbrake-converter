@@ -106,6 +106,8 @@ public class HandBrakeConverterController : ControllerBase
             snap.Origin,
             snap.Progress,
             snap.Eta,
+            Also = _service.OtherSnapshots().Select(x => new { x.CurrentFile, x.CurrentJobId, x.Origin, x.Progress, x.Eta, x.Suspended }).ToList(),
+            ParallelJobs = Math.Clamp(cfg.ParallelJobs, 1, ConversionService.MaxLanes),
             EtaSeconds = BacklogEstimator.ParseEta(snap.Eta),
             Waiting = new { waiting.Files, waiting.Bytes, waiting.Seconds },
             snap.Suspended,
@@ -181,8 +183,78 @@ public class HandBrakeConverterController : ControllerBase
             Name = i.Name,
             Kind = i.GetType().Name,
             Year = i.ProductionYear,
-            Index = i.IndexNumber
+            Index = i.IndexNumber,
+            ExcludedDirect = Plugin.Instance!.Configuration.Excluded.Any(x => string.Equals(x.ItemId, i.Id.ToString("N"), StringComparison.OrdinalIgnoreCase)),
+            Excluded = Plugin.Instance!.Configuration.Excluded.Any(x => string.Equals(x.ItemId, i.Id.ToString("N"), StringComparison.OrdinalIgnoreCase) || (i.Path != null && x.Covers(i.Path)))
         }));
+    }
+
+    /// <summary>Items Auto-convert must never touch.</summary>
+    [HttpGet("Excluded")]
+    public ActionResult GetExcluded() => Ok(Plugin.Instance!.Configuration.Excluded.Select(x => new { x.ItemId, x.Name }));
+
+    /// <summary>Adds the item (movie, series, season or episode) to the exclusion list, or removes it when already there. Returns the new list.</summary>
+    [HttpPost("Excluded/Toggle")]
+    public ActionResult ToggleExcluded([FromQuery] string id)
+    {
+        if (!Guid.TryParse(id, out var guid)) return BadRequest(new { Error = "bad id" });
+        var key = guid.ToString("N");
+        var cfg = Plugin.Instance!.Configuration;
+        var existing = cfg.Excluded.FirstOrDefault(x => string.Equals(x.ItemId, key, StringComparison.OrdinalIgnoreCase));
+        if (existing != null)
+        {
+            cfg.Excluded = cfg.Excluded.Where(x => x != existing).ToArray();
+        }
+        else
+        {
+            var item = _library.GetItemById(guid);
+            if (item == null || string.IsNullOrEmpty(item.Path)) return NotFound(new { Error = "That item has no folder or file to exclude." });
+            cfg.Excluded = cfg.Excluded.Append(new ExcludedItem { ItemId = key, Name = item.Name ?? string.Empty, Path = item.Path }).ToArray();
+        }
+
+        Plugin.Instance!.SaveConfiguration();
+        return Ok(cfg.Excluded);
+    }
+
+    /// <summary>
+    /// Dry run: what Auto-convert and the queue would do right now, with an estimated saving. Reads sizes only; no file is touched.
+    /// The saving is guessed from your own finished conversions when there are enough, otherwise from what the encoder typically achieves.
+    /// </summary>
+    [HttpGet("DryRun")]
+    public ActionResult DryRun()
+    {
+        var cfg = Plugin.Instance!.Configuration;
+        var all = _backlog.FindPending(cfg, int.MaxValue);
+        var done = _history.List(200).Where(h => h.Result == "Converted" && h.OldBytes > 1_000_000 && h.NewBytes > 0 && h.NewBytes < h.OldBytes * 2).Take(40).ToList();
+        double? learned = done.Count >= 3 ? done.Sum(h => (double)h.NewBytes) / done.Sum(h => (double)h.OldBytes) : null;
+        double Typical(string enc) => enc.Contains("265") || enc.Contains("hevc", StringComparison.OrdinalIgnoreCase) ? 0.55 : enc.Contains("av1", StringComparison.OrdinalIgnoreCase) ? 0.5 : enc.Contains("264") ? 0.8 : 0.7;
+
+        long Size(string path) { try { return FileMeta.Length(path); } catch { return 0; } }
+        var rows = all.Select(x => new { P = x, Size = Size(x.Path), Ratio = learned ?? Typical(x.Profile.HandBrake.Encoder ?? string.Empty) }).ToList();
+        var libs = rows.GroupBy(r => r.P.Library).Select(g => new { Name = g.Key, Files = g.Count(), Bytes = g.Sum(r => r.Size), EstBytes = (long)g.Sum(r => r.Size * r.Ratio) }).ToList();
+        var manual = _jobs.List().Where(j => j.Status == "Queued" && !j.IsAuto).ToList();
+        var manualBytes = manual.Sum(j => Size(j.Path));
+        var sample = rows.Take(100).Select(r =>
+        {
+            var note = string.Empty;
+            if (r.P.Profile.DeleteOriginal && cfg.LinkedFiles != "normal" && FileMeta.IsLinked(r.P.Path, out var how)) note = cfg.LinkedFiles == "skip" ? "would be skipped: " + how : "linked (" + how + "): replaced in place, every link changes";
+            return new { Name = System.IO.Path.GetFileName(r.P.Path), r.P.Library, r.Size, Est = (long)(r.Size * r.Ratio), Note = note };
+        }).ToList();
+        var eta = _eta.Get(cfg, string.Empty);
+        return Ok(new
+        {
+            Enabled = cfg.Enabled,
+            Libraries = libs,
+            Files = rows.Count,
+            Bytes = rows.Sum(r => r.Size),
+            EstBytes = (long)rows.Sum(r => r.Size * r.Ratio),
+            Manual = new { Files = manual.Count, Bytes = manualBytes },
+            Excluded = cfg.Excluded.Length,
+            EstSeconds = eta.Seconds,
+            Basis = learned != null ? $"your last {done.Count} conversions (about {(int)Math.Round((1 - learned.Value) * 100)}% smaller)" : "what the chosen encoder typically achieves (a guess until you have a few finished conversions)",
+            Sample = sample,
+            More = Math.Max(0, rows.Count - sample.Count)
+        });
     }
 
     [HttpPost("Queue")]
@@ -226,7 +298,7 @@ public class HandBrakeConverterController : ControllerBase
         _service.SyncAutoEntries(cfg);
         var snap = _service.Snapshot();
         var pending = _backlog.FindPending(cfg, int.MaxValue).GroupBy(p => p.LibraryId).ToDictionary(g => g.Key, g => g.ToList());
-        var autoRunning = snap.CurrentFile.Length > 0 && snap.CurrentJobId.Length == 0;
+        var runningAuto = new[] { snap }.Concat(_service.OtherSnapshots()).Where(x => x.CurrentFile.Length > 0 && x.CurrentJobId.Length == 0).ToList();
         return Ok(_jobs.List().Where(j => j.Status is "Running" or "Queued").Select(j => j.IsAuto
             ? (object)new
             {
@@ -235,8 +307,8 @@ public class HandBrakeConverterController : ControllerBase
                 j.Title,
                 j.LibraryId,
                 Status = "Queued",
-                Running = autoRunning && snap.Origin == j.Title,
-                File = autoRunning && snap.Origin == j.Title ? snap.CurrentFile : string.Empty,
+                Running = runningAuto.Any(x => x.Origin == j.Title),
+                File = runningAuto.FirstOrDefault(x => x.Origin == j.Title)?.CurrentFile ?? string.Empty,
                 Total = pending.TryGetValue(j.LibraryId, out var l) ? l.Count : 0,
                 Next = (pending.TryGetValue(j.LibraryId, out var l2) ? l2 : new List<Pending>()).Take(25).Select(i => i.Path).ToList()
             }

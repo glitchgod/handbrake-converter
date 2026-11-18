@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Jellyfin.Plugin.HandBrakeConverter.Services;
@@ -20,6 +21,7 @@ internal sealed class HandBrakeRun : IDisposable
     private readonly Queue<string> _tail = new();
     private readonly Task[] _readers;
     private readonly Action<double, string?> _onProgress;
+    private long _last = Environment.TickCount64;
 
     private HandBrakeRun(Process proc, Action<double, string?> onProgress)
     {
@@ -53,6 +55,12 @@ internal sealed class HandBrakeRun : IDisposable
     }
 
     public bool HasExited => _proc.HasExited;
+
+    /// <summary>How long HandBrake has printed nothing (progress or messages). Used to spot a hung encode.</summary>
+    public TimeSpan Idle => TimeSpan.FromMilliseconds(Math.Max(0, Environment.TickCount64 - Interlocked.Read(ref _last)));
+
+    /// <summary>Restarts the idle clock (while the encode is paused on purpose).</summary>
+    public void Touch() => Interlocked.Exchange(ref _last, Environment.TickCount64);
 
     public void Suspend() => ProcessControl.Suspend(_proc.Id);
 
@@ -102,6 +110,7 @@ internal sealed class HandBrakeRun : IDisposable
 
     private void Handle(string line)
     {
+        Touch();
         if (line.StartsWith("Encoding:", StringComparison.Ordinal))
         {
             var p = Percent.Match(line);

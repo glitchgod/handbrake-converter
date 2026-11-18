@@ -55,6 +55,22 @@ public class HandBrakeSettings
     /// <summary>srt = turn text subtitles (ASS, MOV_TEXT...) into SRT, which Roku and nearly every player show without re-encoding the video | asis = leave them as they are.</summary>
     public string SubtitleFormat { get; set; } = "srt";
 
+    /// <summary>
+    /// Audio languages to keep, comma separated (eng, jpn). Empty = keep every audio track. Tracks with no language tag are always kept,
+    /// and if no track matches nothing is dropped.
+    /// </summary>
+    public string AudioLanguages { get; set; } = string.Empty;
+
+    /// <summary>auto = remove combing only from videos that are interlaced (DVD, TV recordings) | always | off.</summary>
+    public string Deinterlace { get; set; } = "auto";
+
+    /// <summary>
+    /// Subtitle mode "keep" only. off = subtitles stay inside the video file | also = text tracks are ALSO written as separate .srt files next to
+    /// the video | only = text tracks are written as separate .srt files and removed from inside the file (picture subtitles stay inside).
+    /// Separate files are the most reliable thing for players such as Roku.
+    /// </summary>
+    public string SubtitleExternal { get; set; } = "off";
+
     /// <summary>ISO 639-2 language (eng, jpn...) used to pick the track to burn when BurnTrack is 0.</summary>
     public string BurnLanguage { get; set; } = "eng";
 

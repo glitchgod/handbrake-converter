@@ -95,7 +95,7 @@ public sealed class BacklogScanner
     }
 
     private static string Signature(PluginConfiguration cfg) =>
-        JsonSerializer.Serialize(new { cfg.MinSizeMb, L = cfg.Libraries.Where(l => l.AutoProcess).Select(l => new { l.LibraryId, l.Name, P = cfg.EffectiveProfile(l) }) });
+        JsonSerializer.Serialize(new { cfg.MinSizeMb, X = cfg.Excluded.Select(x => x.Path), L = cfg.Libraries.Where(l => l.AutoProcess).Select(l => new { l.LibraryId, l.Name, P = cfg.EffectiveProfile(l) }) });
 
     private IEnumerable<BaseItem> Query(Guid parent) =>
         _library.GetItemList(new InternalItemsQuery
@@ -126,7 +126,8 @@ public sealed class BacklogScanner
                 // Never re-convert our own converted copies (kept-original mode).
                 if (!profile.DeleteOriginal && System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(label, StringComparison.OrdinalIgnoreCase)) continue;
 
-                if (!File.Exists(path) || (minBytes > 0 && new FileInfo(path).Length < minBytes)) continue;
+                if (cfg.Excluded.Any(x => x.Covers(path))) continue;
+                if (!File.Exists(path) || (minBytes > 0 && FileMeta.Length(path) < minBytes)) continue;
                 result.Add(new Pending(id, path, profile, lib.Name, lib.LibraryId));
             }
         }

@@ -14,7 +14,8 @@ namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 /// <summary>What ffprobe says about a video file.</summary>
 public sealed record MediaInfo(
     double Duration, int AudioTracks, int SubtitleTracks, int Chapters,
-    string VideoCodec, string PixelFormat, string Transfer, bool DolbyVision, int Height = 0, System.Collections.Generic.IReadOnlyList<SubStream>? Subs = null)
+    string VideoCodec, string PixelFormat, string Transfer, bool DolbyVision, int Height = 0, System.Collections.Generic.IReadOnlyList<SubStream>? Subs = null,
+    System.Collections.Generic.IReadOnlyList<string>? AudioLangs = null, bool Interlaced = false)
 {
     /// <summary>HDR10 / PQ or HLG.</summary>
     public bool IsHdr => Transfer is "smpte2084" or "arib-std-b67";
@@ -48,7 +49,7 @@ public class MediaProbe
 
     /// <summary>The ffmpeg Jellyfin itself uses (or one on the PATH); null when there is none.</summary>
     /// <summary>Tests only: pretend there is no ffmpeg.</summary>
-    internal static bool NoFfmpeg;
+    internal static bool NoFfmpeg { get; set; }
 
     public string? FfmpegPath()
     {
@@ -122,8 +123,16 @@ public class MediaProbe
             subs.Add(new SubStream(subs.Count, Str(st, "codec_name"), tag("language").ToLowerInvariant(), forcedFlag || title.Contains("forced", StringComparison.OrdinalIgnoreCase), title));
         }
 
+        var audioLangs = streams.Where(x => Str(x, "codec_type") == "audio").Select(st =>
+            st.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Object
+                ? tg.EnumerateObject().Where(pr => pr.Name.Equals("language", StringComparison.OrdinalIgnoreCase)).Select(pr => (pr.Value.GetString() ?? string.Empty).ToLowerInvariant()).FirstOrDefault() ?? string.Empty
+                : string.Empty).ToList();
+        // field_order is tt/bb/tb/bt for interlaced video; progressive (or missing/unknown) means a normal picture.
+        var fieldOrder = isVideo ? Str(video, "field_order") : string.Empty;
+        var interlaced = fieldOrder is "tt" or "bb" or "tb" or "bt";
+
         return new MediaInfo(seconds, Count("audio"), Count("subtitle"), chapters,
             isVideo ? Str(video, "codec_name") : string.Empty, isVideo ? Str(video, "pix_fmt") : string.Empty, isVideo ? Str(video, "color_transfer") : string.Empty, dolby,
-            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0, subs);
+            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0, subs, audioLangs, interlaced);
     }
 }

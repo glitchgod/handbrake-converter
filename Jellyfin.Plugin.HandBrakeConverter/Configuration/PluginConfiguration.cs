@@ -12,6 +12,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Settings used by every library that doesn't have custom settings, and as the starting point for manual conversions.</summary>
     public ConversionProfile Defaults { get; set; } = new();
 
+    /// <summary>Movies, series, seasons or episodes that Auto-convert must never touch.</summary>
+    public ExcludedItem[] Excluded { get; set; } = Array.Empty<ExcludedItem>();
+
     public LibrarySettings[] Libraries { get; set; } = Array.Empty<LibrarySettings>();
 
     /// <summary>Optional absolute path to an existing HandBrakeCLI. Empty = look for HandBrakeCLI on the server (apt install handbrake-cli).</summary>
@@ -50,6 +53,19 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Replaced originals are kept in the holding folder this many days, then deleted. 0 = delete immediately.</summary>
     public int KeepReplacedDays { get; set; } = 7;
 
+    /// <summary>
+    /// What to do with a hard-linked or symbolic-linked file when replacing originals:
+    /// inplace = write the converted video into the very same file, so every link (library, download folder...) holds the converted video;
+    /// normal = replace the library's name only (other links keep the old data); skip = leave such files alone.
+    /// </summary>
+    public string LinkedFiles { get; set; } = "inplace";
+
+    /// <summary>How many files are converted at the same time (1 to 4). Leave at 1 unless the server has plenty of spare CPU and disk speed.</summary>
+    public int ParallelJobs { get; set; } = 1;
+
+    /// <summary>An encode that prints nothing for this many minutes is treated as hung and stopped. 0 = never.</summary>
+    public int StallMinutes { get; set; } = 30;
+
     // ---- Safety ----
     /// <summary>Discard the result (keep the original) when it isn't smaller than the source. Doesn't apply to manual jobs that keep the original or burn subtitles.</summary>
     public bool SkipIfNotSmaller { get; set; } = true;
@@ -66,9 +82,23 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Where replaced originals are held. Empty = a hidden ".hb-originals" folder inside the video's own library folder (same drive, ignored by Jellyfin).</summary>
     public string TrashFolder { get; set; } = string.Empty;
 
-    public LibrarySettings? FindLibrary(string id) =>
-        Libraries.FirstOrDefault(l => string.Equals(l.LibraryId, id, StringComparison.OrdinalIgnoreCase));
-
     /// <summary>Profile that applies to a library: its custom one if enabled, otherwise the defaults.</summary>
     public ConversionProfile EffectiveProfile(LibrarySettings? lib) => lib != null && lib.UseCustom ? lib.Profile : Defaults;
+}
+
+/// <summary>One item (movie, series, season or episode) left out of Auto-convert. Everything under its path is skipped.</summary>
+public class ExcludedItem
+{
+    public string ItemId { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Path { get; set; } = string.Empty;
+
+    /// <summary>true when <paramref name="file"/> is this item's file, or lives inside its folder.</summary>
+    public bool Covers(string file)
+    {
+        if (string.IsNullOrEmpty(Path) || string.IsNullOrEmpty(file)) return false;
+        if (string.Equals(Path, file, StringComparison.OrdinalIgnoreCase)) return true;
+        var folder = Path.TrimEnd('/', '\\');
+        return file.StartsWith(folder + "/", StringComparison.OrdinalIgnoreCase) || file.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase);
+    }
 }

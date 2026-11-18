@@ -10,13 +10,14 @@ public static class ResultCheck
     public static bool DurationsMatch(double source, double output) => Math.Abs(source - output) <= Math.Max(3.0, source * 0.01);
 
     /// <summary>null = the result is good; otherwise why it must be discarded.</summary>
-    public static string? Problem(MediaInfo src, MediaInfo result, HandBrakeSettings hb, bool outputIsMp4, int? expectedSubtitles = null)
+    public static string? Problem(MediaInfo src, MediaInfo result, HandBrakeSettings hb, bool outputIsMp4, int? expectedSubtitles = null, int? expectedAudio = null)
     {
         if (!DurationsMatch(src.Duration, result.Duration))
             return $"Converted file is {result.Duration:0}s long but the source is {src.Duration:0}s; discarded it and kept the original.";
 
-        if (result.AudioTracks != src.AudioTracks)
-            return $"Converted file has {result.AudioTracks} audio track(s) but the source has {src.AudioTracks}; discarded it and kept the original.";
+        var wantAudio = expectedAudio ?? src.AudioTracks;
+        if (result.AudioTracks != wantAudio)
+            return $"Converted file has {result.AudioTracks} audio track(s) but {(expectedAudio != null ? "" : "the source has ")}{wantAudio}{(expectedAudio != null ? " were planned" : string.Empty)}; discarded it and kept the original.";
 
         // MP4 can only hold text subtitles, so HandBrake legitimately drops picture subtitles there. Burn/none change the count on purpose.
         if (expectedSubtitles != null)

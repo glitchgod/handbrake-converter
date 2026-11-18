@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -29,8 +30,29 @@ public sealed class ConversionService : BackgroundService
     private readonly HandBrakeCapabilities _caps;
     private readonly WatchDataMover _mover;
     private readonly ILogger<ConversionService> _log;
-    private readonly StatusBoard _board = new();
-    private volatile bool _stopAuto;
+
+    // One "lane" = one conversion running at a time. Lane 0 is always on; the others work when "Parallel conversions" is above 1.
+    // Each lane has its own status and its own "stop automatic" flag; the code below uses them through the lane of the running task.
+    private sealed class Lane
+    {
+        public int Id;
+        public readonly StatusBoard Board = new();
+        public volatile bool StopAuto;
+        public volatile string CurrentItem = string.Empty;   // library item being converted by this lane
+        public volatile string CurrentPath = string.Empty;
+        public volatile bool ItemRemoved;                    // Jellyfin removed that item while it was being converted
+    }
+
+    public const int MaxLanes = 4;
+    private readonly Lane[] _lanes = Enumerable.Range(0, MaxLanes).Select(i => new Lane { Id = i }).ToArray();
+    private readonly AsyncLocal<Lane?> _laneContext = new();
+    private Lane CurrentLane => _laneContext.Value ?? _lanes[0];
+    private StatusBoard _board => CurrentLane.Board;
+    private bool _stopAuto { get => CurrentLane.StopAuto; set => CurrentLane.StopAuto = value; }
+
+    // Files being converted right now (path -> bytes reserved), so two lanes never take the same file and the disk check counts them all.
+    private readonly object _claimLock = new();
+    private readonly Dictionary<string, long> _claims = new(StringComparer.Ordinal);
 
     public ConversionService(
         ILibraryManager library,
@@ -58,15 +80,57 @@ public sealed class ConversionService : BackgroundService
         _caps = caps;
         _mover = mover;
         _log = log;
+        _library.ItemRemoved += OnItemRemoved;
+    }
+
+    /// <summary>When the item being converted is removed from the library, flag its lane so the conversion stops and cleans up.</summary>
+    private void OnItemRemoved(object? sender, ItemChangeEventArgs e)
+    {
+        var item = e.Item;
+        if (item == null) return;
+        var id = item.Id.ToString("N");
+        var path = item.Path;
+        foreach (var lane in _lanes)
+        {
+            var cur = lane.CurrentPath;
+            if (cur.Length == 0) continue;
+            var sameItem = string.Equals(lane.CurrentItem, id, StringComparison.OrdinalIgnoreCase);
+            var parent = !string.IsNullOrEmpty(path) && cur.StartsWith(path.TrimEnd('/', '\\') + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            if (sameItem || parent) lane.ItemRemoved = true;
+        }
+    }
+
+    private void WatchItem(Plan p)
+    {
+        var lane = CurrentLane;
+        lane.ItemRemoved = false;
+        lane.CurrentItem = p.Work.ItemId;
+        lane.CurrentPath = p.Source;
+    }
+
+    private void UnwatchItem()
+    {
+        var lane = CurrentLane;
+        lane.CurrentPath = string.Empty;
+        lane.CurrentItem = string.Empty;
+        lane.ItemRemoved = false;
     }
 
     private static PluginConfiguration Cfg => Plugin.Instance!.Configuration;
 
+    /// <summary>The status to show: the first lane that is converting, otherwise lane 0.</summary>
     public ConversionStatus Snapshot()
     {
-        var s = _board.Snapshot();
+        var s = _lanes.Select(l => l.Board.Snapshot()).FirstOrDefault(x => x.CurrentFile.Length > 0) ?? _lanes[0].Board.Snapshot();
         s.UserPaused = _state.Paused;
         return s;
+    }
+
+    /// <summary>Every other conversion running at the same time as the one <see cref="Snapshot"/> returns.</summary>
+    public List<ConversionStatus> OtherSnapshots()
+    {
+        var busy = _lanes.Select(l => l.Board.Snapshot()).Where(x => x.CurrentFile.Length > 0).ToList();
+        return busy.Skip(1).ToList();
     }
 
     /// <summary>One queue entry per Auto-convert library that has files waiting (see <see cref="JobStore.SyncAuto"/>).</summary>
@@ -83,11 +147,16 @@ public sealed class ConversionService : BackgroundService
     /// </summary>
     public bool StopAutomatic()
     {
-        var s = _board.Snapshot();
-        if (s.CurrentFile.Length == 0 || s.CurrentJobId.Length > 0) return false;
-        _stopAuto = true;
-        _watcher.Wake();
-        return true;
+        foreach (var lane in _lanes)
+        {
+            var s = lane.Board.Snapshot();
+            if (s.CurrentFile.Length == 0 || s.CurrentJobId.Length > 0) continue;
+            lane.StopAuto = true;
+            _watcher.Wake();
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Pause freezes a running encode and stops anything new from starting; Continue undoes it. Persisted.</summary>
@@ -104,6 +173,13 @@ public sealed class ConversionService : BackgroundService
         public string Signature { get; init; } = string.Empty;
         public SubPlan? SubPlan { get; init; }
         public string? Ffmpeg { get; init; }
+        public string LinkNote { get; init; } = string.Empty;
+        public bool InPlace { get; init; }
+        public TrashEntry? Held { get; set; }
+        public List<string> OriginalSubFiles { get; set; } = new();
+        public int[]? AudioTracks { get; init; }
+        public bool Deinterlace { get; init; }
+        public string SidecarNote { get; set; } = string.Empty;
         public Job? Job => Work.Job;
         public ConversionProfile Profile => Work.Profile;
     }
@@ -118,8 +194,24 @@ public sealed class ConversionService : BackgroundService
         try { await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken).ConfigureAwait(false); }
         catch (OperationCanceledException) { return; }
 
+        try { CleanupStaleTemps(); } catch (Exception ex) { _log.LogWarning(ex, "Startup clean-up failed"); }
+
+        await Task.WhenAll(_lanes.Select(l => Task.Run(() => LaneLoopAsync(l, stoppingToken), stoppingToken))).ConfigureAwait(false);
+    }
+
+    private async Task LaneLoopAsync(Lane lane, CancellationToken stoppingToken)
+    {
+        _laneContext.Value = lane;
         while (!stoppingToken.IsCancellationRequested)
         {
+            // Lanes above the chosen number just wait (a lane that is already converting finishes its file first).
+            if (lane.Id >= Math.Clamp(Cfg.ParallelJobs, 1, MaxLanes))
+            {
+                try { await _watcher.WaitAsync(TimeSpan.FromSeconds(30), stoppingToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) { break; }
+                continue;
+            }
+
             var didWork = false;
             try
             {
@@ -135,9 +227,12 @@ public sealed class ConversionService : BackgroundService
                 _board.Rest("Error", ex.Message);
             }
 
-            try { await _mover.ApplyPendingAsync(stoppingToken).ConfigureAwait(false); }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception ex) { _log.LogWarning(ex, "Carrying watch data over failed"); }
+            if (lane.Id == 0)
+            {
+                try { await _mover.ApplyPendingAsync(stoppingToken).ConfigureAwait(false); }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
+                catch (Exception ex) { _log.LogWarning(ex, "Carrying watch data over failed"); }
+            }
 
             try { await _watcher.WaitAsync(TimeSpan.FromSeconds(didWork ? 3 : 30), stoppingToken).ConfigureAwait(false); }
             catch (OperationCanceledException) { break; }
@@ -148,7 +243,7 @@ public sealed class ConversionService : BackgroundService
     private async Task<bool> TickAsync(CancellationToken ct)
     {
         var cfg = Cfg;
-        try { _trash.Purge(); } catch (Exception ex) { _log.LogWarning(ex, "Trash purge failed"); }
+        if (CurrentLane.Id == 0) { try { _trash.Purge(); } catch (Exception ex) { _log.LogWarning(ex, "Trash purge failed"); } }
 
         if (!cfg.Enabled) { _board.Rest("Disabled", "Turned off (master switch on the Overview tab)."); return false; }
         if (_state.Paused) { _board.Rest("Paused", "Paused. Press Continue on the Overview tab to resume."); return false; }
@@ -157,16 +252,37 @@ public sealed class ConversionService : BackgroundService
         SyncAutoEntries(cfg);
 
         // The queue order decides: walk it from the top; a manual job is the work, an Auto-convert entry is the next waiting file of its library.
+        // Choosing and claiming happen together under a lock, so two lanes can never take the same file.
         Job? manual = null; Pending? auto = null;
-        foreach (var e in _jobs.Entries())
+        string? claimed = null;
+        lock (_claimLock)
         {
-            if (e.IsAuto)
+            foreach (var e in _jobs.Entries())
             {
-                if (!inWindow) continue;
-                if (_backlog.FindPending(cfg, 1, e.LibraryId).FirstOrDefault() is { } found) { auto = found; break; }
+                if (e.IsAuto)
+                {
+                    if (!inWindow) continue;
+                    if (_backlog.FindPending(cfg, _claims.Count + 1, e.LibraryId).FirstOrDefault(p => !_claims.ContainsKey(p.Path)) is { } found) { auto = found; break; }
+                }
+                else if ((inWindow || e.IgnoreSchedule) && !_claims.ContainsKey(e.Path)) { manual = e; break; }
             }
-            else if (inWindow || e.IgnoreSchedule) { manual = e; break; }
+
+            claimed = manual?.Path ?? auto?.Path;
+            if (claimed != null) _claims[claimed] = 0;
         }
+
+        try
+        {
+            return await TickWorkAsync(cfg, inWindow, manual, auto, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (claimed != null) lock (_claimLock) _claims.Remove(claimed);
+        }
+    }
+
+    private async Task<bool> TickWorkAsync(PluginConfiguration cfg, bool inWindow, Job? manual, Pending? auto, CancellationToken ct)
+    {
 
         if (manual == null && auto == null && !inWindow)
         {
@@ -219,6 +335,17 @@ public sealed class ConversionService : BackgroundService
 
         _stopAuto = false; // a stop request only ever applies to the automatic conversion that was running when it was made
         if (!File.Exists(src)) { Fail(w, "Source file not found: " + src); return true; }
+        if (VideoFiles.Unsupported(src, out var unsupportedWhy))
+        {
+            var msg = "Left alone: " + unsupportedWhy + ", which this plugin cannot convert.";
+            _log.LogInformation("{Src}: {Why}", src, msg);
+            _state.MarkSkipped(w.ItemId, src);
+            if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Skipped", msg);
+            Record(w, "Skipped", msg);
+            _board.Rest("Idle", msg);
+            return true;
+        }
+
 
         var (hb, ext) = ResolveContainer(profile, src);
         var signature = VideoSignature(hb);
@@ -258,9 +385,25 @@ public sealed class ConversionService : BackgroundService
             return true;
         }
 
-        var size = new FileInfo(src).Length;
+        var linkedHow = string.Empty;
+        var isLinked = profile.DeleteOriginal && FileMeta.IsLinked(src, out linkedHow);
+        if (isLinked && cfg.LinkedFiles == "skip")
+        {
+            var why = $"Left alone: this file is {linkedHow}. Change \"Linked files\" in Original files to convert it anyway.";
+            _log.LogInformation("{Src}: {Why}", src, why);
+            _state.MarkSkipped(w.ItemId, src);
+            if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Skipped", why);
+            Record(w, "Skipped", why);
+            _board.Rest("Idle", why);
+            return true;
+        }
+
+        // 1-for-1 replacement of a linked file: the converted video is written INTO the existing file, so every link to it changes together.
+        // Only possible when the file keeps its name (a new extension means a new file).
+        var inPlace = isLinked && cfg.LinkedFiles != "normal" && final == src;
+        var size = FileMeta.Length(src);
         var keepDays = profile.DeleteOriginal ? Math.Max(0, cfg.KeepReplacedDays) : 0;
-        var space = CheckSpace(cfg, dir, src, size, keepDays > 0);
+        var space = CheckSpace(cfg, dir, src, inPlace ? size * 2 : size, keepDays > 0);
         if (space != null)
         {
             _log.LogWarning("Not converting {Src}: {Why}", src, space);
@@ -268,6 +411,7 @@ public sealed class ConversionService : BackgroundService
             return false;
         }
 
+        lock (_claimLock) { if (_claims.ContainsKey(src)) _claims[src] = inPlace ? size * 2 : size; }
         var info = await _probe.ProbeAsync(src, ct).ConfigureAwait(false);
         // Level 4.1 only holds up to 1080p; bigger pictures need a higher level, so leave it to x264 there.
         if (info is { Height: > 1080 } && (hb.MaxHeight == 0 || hb.MaxHeight > 1080) && hb.H264Level != "auto")
@@ -276,7 +420,7 @@ public sealed class ConversionService : BackgroundService
             hb.H264Level = "auto";
         }
 
-        var hdrNote = await HdrDecisionAsync(w, hb, info, launcher, ct).ConfigureAwait(false);
+        var hdrNote = await HdrDecisionAsync(hb, info, launcher, ct).ConfigureAwait(false);
         if (hdrNote != null)
         {
             _log.LogInformation("{Src}: {Why}", src, hdrNote);
@@ -294,16 +438,44 @@ public sealed class ConversionService : BackgroundService
         var ffmpeg = hb.SubtitleMode == "keep" && info?.Subs is { Count: > 0 } ? _probe.FfmpegPath() : null;
         if (ffmpeg != null) subPlan = SubtitlePlanner.Make(info!.Subs, hb, IsMp4(ext));
 
-        var plan = new Plan(w, hb, src, final, final + ".hbtmp", size, keepDays, info) { Signature = signature, SubPlan = subPlan, Ffmpeg = ffmpeg };
+        var audioTracks = AudioPlanner.Select(info?.AudioLangs, hb.AudioLanguages);
+        var deinterlace = hb.Deinterlace == "auto" && info is { Interlaced: true };
+        var plan = new Plan(w, hb, src, final, final + ".hbtmp", size, keepDays, info) { Signature = signature, SubPlan = subPlan, Ffmpeg = ffmpeg,
+            InPlace = inPlace, AudioTracks = audioTracks, Deinterlace = deinterlace,
+            LinkNote = !isLinked ? string.Empty : inPlace ? $"; the file was {linkedHow}, so every link to it now holds the converted video" : $"; the file was {linkedHow}, so the other copy still holds the old data" };
         TryDelete(plan.Temp);
+        _state.TrackTemp(plan.Temp);
+        WatchItem(plan);
+        try
+        {
+            return await ConvertPlanAsync(plan, w, launcher, cfg, profile, subPlan, ffmpeg, src, final, ct).ConfigureAwait(false);
+        }
+        finally { UnwatchItem(); _state.UntrackTemp(plan.Temp); }
+    }
 
+    private async Task<bool> ConvertPlanAsync(Plan plan, Work w, HandBrakeLocator.Launcher launcher, PluginConfiguration cfg, ConversionProfile profile, SubPlan? subPlan, string? ffmpeg, string src, string final, CancellationToken ct)
+    {
         if (!await EncodeAsync(plan, launcher, ct).ConfigureAwait(false)) return true;
 
         var outSize = new FileInfo(plan.Temp).Length;
         if (!await ResultAcceptableAsync(plan, outSize, cfg, ct).ConfigureAwait(false)) return true;
         if (!await WaitForViewersAsync(plan, ct).ConfigureAwait(false)) return true;
+        if (SourceGone(plan)) return true;
 
+        // Separate subtitle files come from the original, so they are made before it is replaced and moved into place afterwards.
+        var sidecars = new List<(string Temp, string Final)>();
+        if (subPlan is { External.Count: > 0 } && ffmpeg != null)
+        {
+            sidecars = await ExtractSidecarsAsync(ffmpeg, plan.Source, SubtitleSidecars.Plan(final, subPlan.External), w.Job, ct).ConfigureAwait(false);
+            if (sidecars.Count > 0) plan.SidecarNote = $"; {sidecars.Count} subtitle file(s) written next to it";
+        }
+
+        if (profile.DeleteOriginal) plan.OriginalSubFiles = SubtitleSidecars.FilesNextTo(src);
         Swap(plan, outSize, cfg);
+        var swapped = File.Exists(plan.Final) && !File.Exists(plan.Temp);
+        FinishSidecars(sidecars, swapped);
+        if (swapped) AttachRelatedSubtitles(plan, sidecars.Where(x => File.Exists(x.Final)).Select(x => x.Final));
+        if (swapped && !profile.DeleteOriginal) CopySubtitleFiles(plan.Source, plan.Final);
         return true;
     }
 
@@ -311,7 +483,7 @@ public sealed class ConversionService : BackgroundService
     /// HDR / Dolby Vision handling. Returns why the file must be left alone, or null to go ahead (in "keep" mode the settings are
     /// switched to the 10-bit encoder so the HDR information survives).
     /// </summary>
-    private async Task<string?> HdrDecisionAsync(Work w, HandBrakeSettings hb, MediaInfo? info, HandBrakeLocator.Launcher launcher, CancellationToken ct)
+    private async Task<string?> HdrDecisionAsync(HandBrakeSettings hb, MediaInfo? info, HandBrakeLocator.Launcher launcher, CancellationToken ct)
     {
         if (info == null || !(info.IsHdr || info.DolbyVision) || hb.HdrMode == "ignore") return null;
         var kind = info.DolbyVision ? "a Dolby Vision" : "an HDR";
@@ -362,7 +534,7 @@ public sealed class ConversionService : BackgroundService
         HandBrakeRun run;
         try
         {
-            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp, noSubtitles: p.SubPlan != null), Cfg.LowPriority,
+            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp, noSubtitles: p.SubPlan != null, audioTracks: p.AudioTracks, deinterlace: p.Deinterlace), Cfg.LowPriority,
                 (pct, eta) => _board.Set(s => { s.Progress = pct; if (eta != null) s.Eta = eta; }));
         }
         catch (Exception ex)
@@ -379,7 +551,7 @@ public sealed class ConversionService : BackgroundService
             _board.Set(s => { s.State = "Encoding"; s.Message = string.Empty; s.CurrentFile = p.Source; s.CurrentJobId = job?.Id ?? string.Empty; s.Progress = 0; s.Eta = string.Empty; s.Suspended = false; s.Origin = p.Work.Origin; });
 
             string? stop;
-            try { stop = await MonitorAsync(run, job, ct).ConfigureAwait(false); }
+            try { stop = await MonitorAsync(run, job, p.Source, ct).ConfigureAwait(false); }
             catch (OperationCanceledException)
             {
                 // Jellyfin is shutting down: stop the encode, keep the job queued for next start.
@@ -393,12 +565,18 @@ public sealed class ConversionService : BackgroundService
             {
                 await run.KillAsync().ConfigureAwait(false);
                 TryDelete(p.Temp);
-                if (stop == "autostop")
+                if (stop == "gone") SourceGone(p);
+                else if (stop == "autostop")
                 {
                     _stopAuto = false;
                     _log.LogInformation("Automatic conversion of {Src} stopped to let queued jobs run", p.Source);
                     Record(p.Work, "Skipped", "Stopped so your queued job could run; it will be picked up again afterwards", seconds: p.Clock.Elapsed.TotalSeconds);
                     _board.Rest("Idle", "Stopped the automatic conversion; starting your queued job.");
+                }
+                else if (stop == "stall")
+                {
+                    _log.LogError("HandBrake printed nothing for {Min} minutes on {Src}; stopped it", Cfg.StallMinutes, p.Source);
+                    Fail(p.Work, $"HandBrake stopped responding (no output for {Cfg.StallMinutes} minutes), so it was stopped. The original was not touched.", p.Clock.Elapsed.TotalSeconds);
                 }
                 else if (stop == "cancel")
                 {
@@ -442,6 +620,7 @@ public sealed class ConversionService : BackgroundService
 
         TryDelete(mux);
         TryDelete(p.Temp);
+        if (SourceGone(p)) return false;
         if (p.Job != null && _jobs.IsCancelRequested(p.Job.Id))
         {
             _jobs.SetStatus(p.Job.Id, "Cancelled");
@@ -461,6 +640,128 @@ public sealed class ConversionService : BackgroundService
         return false;
     }
 
+    /// <summary>Writes the given subtitle tracks of <paramref name="source"/> to temporary files. A track that fails is skipped (never fails the job).</summary>
+    private async Task<List<(string Temp, string Final)>> ExtractSidecarsAsync(string ffmpeg, string source, List<(SubStream Track, string Path)> items, Job? job, CancellationToken ct)
+    {
+        var made = new List<(string, string)>();
+        foreach (var (track, path) in items)
+        {
+            if (File.Exists(path)) continue; // never overwrite a subtitle file that is already there
+            var tmp = path + ".hbtmp";
+            TryDelete(tmp);
+            _state.TrackTemp(tmp);
+            var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.ExtractArgs(source, track.Index, tmp), job, ct).ConfigureAwait(false);
+            if (ok && File.Exists(tmp) && new FileInfo(tmp).Length > 0)
+            {
+                FileMeta.CopyAccess(source, tmp);
+                made.Add((tmp, path));
+            }
+            else
+            {
+                TryDelete(tmp);
+                _state.UntrackTemp(tmp);
+                _log.LogWarning("Could not write subtitle file {File}: {Why}", path, tail);
+            }
+        }
+
+        return made;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex SubtitleFileTail = new(@"^(\.[A-Za-z0-9\-]{1,12}){0,3}\.(srt|ass|ssa|sub|idx|vtt|sup)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Keep-original mode: subtitle files that sit next to the original (Name.eng.srt) are copied to the converted copy's name
+    /// (Name - Label.eng.srt) so the copy has them too. Never overwrites.
+    /// </summary>
+    private void CopySubtitleFiles(string original, string converted)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(original)!;
+            var from = Path.GetFileNameWithoutExtension(original);
+            var to = Path.GetFileNameWithoutExtension(converted);
+            foreach (var f in Directory.GetFiles(dir, from + ".*"))
+            {
+                var name = Path.GetFileName(f);
+                var tail = name.Substring(from.Length);
+                if (!SubtitleFileTail.IsMatch(tail)) continue;
+                var dest = Path.Combine(dir, to + tail);
+                if (!File.Exists(dest)) File.Copy(f, dest);
+            }
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Could not copy subtitle files for {File}", converted); }
+    }
+
+    /// <summary>
+    /// At startup: clears temporary files a crash or power cut left behind. A backup made during an in-place overwrite is put back over
+    /// the file instead (the overwrite may have been cut off half-way), never just deleted.
+    /// </summary>
+    internal void CleanupStaleTemps()
+    {
+        foreach (var path in _state.TakeStaleTemps())
+        {
+            try
+            {
+                if (path.EndsWith(".hbbak", StringComparison.Ordinal))
+                {
+                    var target = path.Substring(0, path.Length - ".hbbak".Length);
+                    if (File.Exists(path) && File.Exists(target))
+                    {
+                        using (var b = new FileStream(path, FileMode.Open, FileAccess.Read))
+                        using (var t = new FileStream(target, FileMode.Open, FileAccess.Write, FileShare.None)) { t.SetLength(0); b.CopyTo(t, 1 << 20); t.Flush(true); }
+                        _log.LogWarning("Put {File} back from its backup after an interrupted in-place conversion", target);
+                    }
+
+                    TryDelete(path);
+                    continue;
+                }
+
+                TryDelete(path);
+                TryDelete(path + ".sub");
+                _log.LogInformation("Removed leftover temporary file {File}", path);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not clean up {File}", path); }
+        }
+    }
+
+    /// <summary>
+    /// Replace mode: the subtitle files that sat next to the original are deleted together with the held original, but only the ones
+    /// whose language the converted video still has (inside it, or as a subtitle file written for it). Anything else stays.
+    /// </summary>
+    private void AttachRelatedSubtitles(Plan p, IEnumerable<string> writtenFiles)
+    {
+        var held = p.Held;
+        if (p.OriginalSubFiles.Count == 0 || (held == null && p.KeepDays > 0)) return;
+        try
+        {
+            var langs = new List<string>();
+            var finalStem = Path.GetFileNameWithoutExtension(p.Final);
+            if (p.SubPlan != null) { langs.AddRange(p.SubPlan.Keep.Select(s => s.Language)); langs.AddRange(writtenFiles.Select(f => SubtitleSidecars.LanguageOf(f, finalStem))); }
+            else if (p.HandBrake.SubtitleMode == "keep" && p.SourceInfo?.Subs != null) langs.AddRange(p.SourceInfo.Subs.Select(s => s.Language));
+            var stem = Path.GetFileNameWithoutExtension(p.Source);
+            var covered = SubtitleSidecars.Covered(p.OriginalSubFiles, stem, langs);
+            if (covered.Count == 0) return;
+            if (held != null) _trash.SetRelated(held.Id, covered);
+            else foreach (var f in covered) TryDelete(f); // nothing is held, so they go right away with the old file
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Could not note the subtitle files that belong to {Src}", p.Source); }
+    }
+
+    /// <summary>Moves the finished subtitle files into place (when the video was swapped in), or throws them away.</summary>
+    private void FinishSidecars(List<(string Temp, string Final)> files, bool swapped)
+    {
+        foreach (var (tmp, fin) in files)
+        {
+            try
+            {
+                if (swapped && !File.Exists(fin)) File.Move(tmp, fin);
+                else TryDelete(tmp);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not place subtitle file {File}", fin); TryDelete(tmp); }
+            _state.UntrackTemp(tmp);
+        }
+    }
+
     private static bool IsMp4(string ext) => ext.Equals(".mp4", StringComparison.OrdinalIgnoreCase) || ext.Equals(".m4v", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Runs ffmpeg to completion; stopping the job (or Jellyfin shutting down) kills it.</summary>
@@ -472,11 +773,13 @@ public sealed class ConversionService : BackgroundService
         if (proc == null) return (false, "could not start ffmpeg");
         var err = proc.StandardError.ReadToEndAsync(ct);
         _ = proc.StandardOutput.ReadToEndAsync(ct);
+        var clock = System.Diagnostics.Stopwatch.StartNew();
         try
         {
             while (!proc.HasExited)
             {
                 ct.ThrowIfCancellationRequested();
+                if (clock.Elapsed > TimeSpan.FromHours(3)) { try { proc.Kill(true); } catch { } return (false, "ffmpeg ran for over 3 hours and was stopped"); }
                 if (job != null && _jobs.IsCancelRequested(job.Id)) { try { proc.Kill(true); } catch { } return (false, "stopped"); }
                 if (job == null && _stopAuto) { try { proc.Kill(true); } catch { } _stopAuto = false; return (false, "stopped"); }
                 await Task.Delay(500, ct).ConfigureAwait(false);
@@ -511,23 +814,50 @@ public sealed class ConversionService : BackgroundService
         SubPlan? sp = hb.SubtitleMode == "none"
             ? (info.SubtitleTracks > 0 ? new SubPlan(Array.Empty<SubStream>(), Array.Empty<string>(), info.SubtitleTracks, "all subtitle tracks removed") { NeedsWork = true } : null)
             : SubtitlePlanner.Make(info.Subs, hb, mp4);
-        if (sp is not { NeedsWork: true }) return false;
+        // Separate subtitle files that are wanted but not there yet.
+        var wantedSidecars = hb.SubtitleMode == "keep" && sp != null ? SubtitleSidecars.Plan(target, sp.External) : new List<(SubStream Track, string Path)>();
+        var missing = wantedSidecars.Where(x => !File.Exists(x.Path)).ToList();
+        if (sp is not { NeedsWork: true } && missing.Count == 0) return false;
 
-        var size = new FileInfo(target).Length;
+        if (sp is not { NeedsWork: true })
+        {
+            // Only the separate files are missing: write them from the video's own subtitle tracks, nothing else changes.
+            if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Running");
+            _board.Set(s => { s.State = "Encoding"; s.Message = "Writing subtitle files…"; s.CurrentFile = target; s.CurrentJobId = w.Job?.Id ?? string.Empty; s.Progress = 50; s.Eta = string.Empty; s.Suspended = false; s.Origin = w.Origin; });
+            var onlyFiles = await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false);
+            FinishSidecars(onlyFiles, swapped: true);
+            if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Done");
+            Record(w, "Converted", $"Subtitle files written next to it ({onlyFiles.Count}); video and audio untouched", new FileInfo(target).Length, new FileInfo(target).Length, 0, Path.GetFileName(target));
+            _board.Rest("Idle", "Wrote the subtitle files for " + Path.GetFileName(target));
+            return true;
+        }
+
+        var size = FileMeta.Length(target);
         var keepDays = profile.DeleteOriginal ? Math.Max(0, cfg.KeepReplacedDays) : 0;
         var space = CheckSpace(cfg, dir, target, size, keepDays > 0);
         if (space != null) { _board.Rest("Waiting", space); return false; }
 
         var plan = new Plan(w, hb, target, target, target + ".hbtmp", size, keepDays, info) { Signature = VideoSignature(hb) };
         TryDelete(plan.Temp);
+        _state.TrackTemp(plan.Temp);
+        WatchItem(plan);
+        try { return await FixSubtitlesCoreAsync(w, hb, plan, sp!, missing, ffmpeg, target, mp4, info, size, keepDays, cfg, profile, ct).ConfigureAwait(false); }
+        finally { UnwatchItem(); _state.UntrackTemp(plan.Temp); }
+    }
+
+    private async Task<bool> FixSubtitlesCoreAsync(Work w, HandBrakeSettings hb, Plan plan, SubPlan sp, List<(SubStream Track, string Path)> missing, string ffmpeg, string target, bool mp4, MediaInfo info, long size, int keepDays, PluginConfiguration cfg, ConversionProfile profile, CancellationToken ct)
+    {
         if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Running");
         _board.Set(s => { s.State = "Encoding"; s.Message = "Fixing subtitles only (video is not touched)…"; s.CurrentFile = target; s.CurrentJobId = w.Job?.Id ?? string.Empty; s.Progress = 50; s.Eta = string.Empty; s.Suspended = false; s.Origin = w.Origin; });
         _log.LogInformation("{Target}: fixing subtitles only ({Plan})", target, sp.Summary);
 
+        // Separate files first: they are taken from the tracks that are about to be rewritten.
+        var fixSidecars = missing.Count > 0 ? await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false) : new List<(string Temp, string Final)>();
         var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.Args(target, null, sp, mp4, plan.Temp), w.Job, ct).ConfigureAwait(false);
         if (!ok || !File.Exists(plan.Temp) || new FileInfo(plan.Temp).Length < 100_000)
         {
             TryDelete(plan.Temp);
+            FinishSidecars(fixSidecars, false);
             if (w.Job != null && _jobs.IsCancelRequested(w.Job.Id)) { _jobs.SetStatus(w.Job.Id, "Cancelled"); Record(w, "Skipped", "Stopped by you"); _board.Rest("Idle", "Cancelled."); }
             else Fail(w, "Could not fix the subtitles (ffmpeg): " + tail, plan.Clock.Elapsed.TotalSeconds);
             return true;
@@ -536,10 +866,12 @@ public sealed class ConversionService : BackgroundService
         var result = await _probe.ProbeAsync(plan.Temp, ct).ConfigureAwait(false);
         var bad = result == null ? "Could not read the fixed file with ffprobe, so it was not used (the file was left as it was)."
             : ResultCheck.Problem(info, result, hb, mp4, sp.Keep.Count);
-        if (bad != null) { TryDelete(plan.Temp); Fail(w, bad, plan.Clock.Elapsed.TotalSeconds); return true; }
+        if (bad != null) { TryDelete(plan.Temp); FinishSidecars(fixSidecars, false); Fail(w, bad, plan.Clock.Elapsed.TotalSeconds); return true; }
 
-        if (!await WaitForViewersAsync(plan, ct).ConfigureAwait(false)) return true;
+        if (!await WaitForViewersAsync(plan, ct).ConfigureAwait(false)) { FinishSidecars(fixSidecars, false); return true; }
+        if (SourceGone(plan)) { FinishSidecars(fixSidecars, false); return true; }
         TrashEntry? held = null;
+        FileMeta.CopyAccess(target, plan.Temp);
         try
         {
             if (profile.DeleteOriginal && keepDays > 0) held = _trash.Add(target, keepDays, HoldingFolder(cfg, target));
@@ -548,10 +880,12 @@ public sealed class ConversionService : BackgroundService
         catch (Exception ex)
         {
             TryDelete(plan.Temp);
+            FinishSidecars(fixSidecars, false);
             Fail(w, "Could not finalise the subtitle fix: " + ex.Message, plan.Clock.Elapsed.TotalSeconds);
             return true;
         }
 
+        FinishSidecars(fixSidecars, true);
         var newSize = new FileInfo(target).Length;
         if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Done");
         Record(w, "Converted", "Subtitles fixed, video and audio untouched: " + sp.Summary + (held != null ? $"; previous file held {keepDays} days" : string.Empty), size, newSize, plan.Clock.Elapsed.TotalSeconds, Path.GetFileName(target));
@@ -561,7 +895,7 @@ public sealed class ConversionService : BackgroundService
     }
 
     /// <summary>Waits for the encode to end, freezing it while you paused or someone is watching. Returns "cancel", "window" or null (finished).</summary>
-    private async Task<string?> MonitorAsync(HandBrakeRun run, Job? job, CancellationToken ct)
+    private async Task<string?> MonitorAsync(HandBrakeRun run, Job? job, string source, CancellationToken ct)
     {
         var suspended = false;
         while (!run.HasExited)
@@ -569,12 +903,15 @@ public sealed class ConversionService : BackgroundService
             ct.ThrowIfCancellationRequested();
             var cfg = Cfg;
 
+            if (CurrentLane.ItemRemoved || !File.Exists(source)) return "gone";
             if (job != null && _jobs.IsCancelRequested(job.Id)) return "cancel";
             if (job == null && _stopAuto) return "autostop";
             if (!cfg.FinishCurrentAfterWindow && !(job?.IgnoreSchedule ?? false) && !ScheduleEvaluator.IsAllowed(DateTime.Now, cfg)) return "window";
 
             var byUser = _state.Paused;
             var freeze = byUser || (cfg.PauseWhileStreaming && _watcher.IsAnyoneWatching(cfg));
+            if (freeze) run.Touch();
+            else if (cfg.StallMinutes > 0 && run.Idle > TimeSpan.FromMinutes(cfg.StallMinutes)) return "stall";
             if (freeze != suspended)
             {
                 if (freeze) run.Suspend(); else run.Resume();
@@ -621,13 +958,29 @@ public sealed class ConversionService : BackgroundService
         var result = await _probe.ProbeAsync(p.Temp, ct).ConfigureAwait(false);
         var bad = p.SourceInfo == null || result == null
             ? "Could not read the file details with ffprobe, so the result was not trusted (original kept). Turn off the check in Original files > After converting if ffprobe is unavailable."
-            : ResultCheck.Problem(p.SourceInfo, result, p.HandBrake, Path.GetExtension(p.Final).Equals(".mp4", StringComparison.OrdinalIgnoreCase), p.SubPlan?.Keep.Count);
+            : ResultCheck.Problem(p.SourceInfo, result, p.HandBrake, Path.GetExtension(p.Final).Equals(".mp4", StringComparison.OrdinalIgnoreCase), p.SubPlan?.Keep.Count, p.AudioTracks?.Length);
         if (bad == null) return true;
 
         TryDelete(p.Temp);
         _log.LogError("{Src}: {Why}", p.Source, bad);
         Fail(p.Work, bad, p.Clock.Elapsed.TotalSeconds);
         return false;
+    }
+
+    /// <summary>
+    /// If the original was deleted or moved while the encode ran, the result is thrown away: writing it back would bring
+    /// back a video that was removed on purpose. Returns true when the source is gone.
+    /// </summary>
+    private bool SourceGone(Plan p)
+    {
+        if (File.Exists(p.Source) && !CurrentLane.ItemRemoved) return false;
+        TryDelete(p.Temp);
+        const string why = "The original was deleted or moved while converting (or removed from the library), so the conversion was stopped and everything it made was removed.";
+        _log.LogWarning("{Src}: {Why}", p.Source, why);
+        if (p.Job != null) _jobs.SetStatus(p.Job.Id, "Skipped", why);
+        Record(p.Work, "Skipped", why, p.SourceSize, seconds: p.Clock.Elapsed.TotalSeconds);
+        _board.Rest("Idle", why);
+        return true;
     }
 
     /// <summary>
@@ -668,6 +1021,53 @@ public sealed class ConversionService : BackgroundService
     }
 
     /// <summary>
+    /// Writes the converted file's bytes into the existing file (same inode), so hard links and symbolic links all see the new video.
+    /// A real copy of the old file is made first (held for the usual days, or kept only until the write succeeded) and is put back if the
+    /// write fails part-way, because an in-place write is not atomic. Returns the held entry, if any.
+    /// </summary>
+    private TrashEntry? OverwriteInPlace(Plan p, PluginConfiguration cfg)
+    {
+        TrashEntry? held = null;
+        string backup;
+        var tempBackup = false;
+        if (p.KeepDays > 0)
+        {
+            held = _trash.Add(p.Source, p.KeepDays, HoldingFolder(cfg, p.Source), copy: true);
+            backup = held.TrashedPath;
+        }
+        else
+        {
+            backup = p.Source + ".hbbak";
+            _state.TrackTemp(backup);
+            File.Copy(p.Source, backup, true);
+            tempBackup = true;
+        }
+
+        try
+        {
+            using (var from = new FileStream(p.Temp, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var to = new FileStream(p.Source, FileMode.Open, FileAccess.Write, FileShare.None))
+            {
+                to.SetLength(0);
+                from.CopyTo(to, 1 << 20);
+                to.Flush(true);
+            }
+        }
+        catch
+        {
+            try { using var b = new FileStream(backup, FileMode.Open, FileAccess.Read); using var t = new FileStream(p.Source, FileMode.Open, FileAccess.Write, FileShare.None); t.SetLength(0); b.CopyTo(t, 1 << 20); t.Flush(true); }
+            catch (Exception ex) { _log.LogError(ex, "Could not put {Src} back after a failed in-place write; the old copy is at {Backup}", p.Source, backup); tempBackup = false; }
+            if (held != null) { try { _trash.DeleteNow(held.Id); } catch { } }
+            if (tempBackup) { TryDelete(backup); _state.UntrackTemp(backup); }
+            throw;
+        }
+
+        TryDelete(p.Temp);
+        if (tempBackup) { TryDelete(backup); _state.UntrackTemp(backup); }
+        return held;
+    }
+
+    /// <summary>
     /// Order matters: state is recorded before the swap so a crash between the steps can never cause a re-conversion loop, and the
     /// original is moved aside (not deleted) before the new file takes its place.
     /// </summary>
@@ -682,12 +1082,18 @@ public sealed class ConversionService : BackgroundService
         if (p.Profile.DeleteOriginal && p.Final != p.Source && p.Profile.KeepWatchData)
             carry = _mover.Capture(p.Work.ItemId, p.Final, p.Job?.Title is { Length: > 0 } jt ? jt : Path.GetFileNameWithoutExtension(p.Source));
 
+        FileMeta.CopyAccess(p.Source, p.Temp);
         try
         {
             if (!p.Profile.DeleteOriginal)
             {
                 _state.MarkProcessed(p.Work.ItemId, p.Source, p.Final, saved, p.Signature); marked = true;
                 File.Move(p.Temp, p.Final);
+            }
+            else if (p.Final == p.Source && p.InPlace)
+            {
+                held = OverwriteInPlace(p, cfg);
+                _state.MarkProcessed(p.Work.ItemId, p.Source, p.Final, saved, p.Signature); marked = true;
             }
             else if (p.Final == p.Source)
             {
@@ -711,12 +1117,17 @@ public sealed class ConversionService : BackgroundService
             return;
         }
 
+        p.Held = held;
+
         _log.LogInformation("Done {Final} ({Old} -> {New} MB){Held}", p.Final, p.SourceSize / 1048576, outSize / 1048576,
             held != null ? $"; original held until {held.Expires:yyyy-MM-dd}" : string.Empty);
         if (p.Job != null) _jobs.SetStatus(p.Job.Id, "Done");
         var outcome = !p.Profile.DeleteOriginal ? "Original kept; converted copy added: " + Path.GetFileName(p.Final)
             : p.Final == p.Source ? "Original replaced in place (same file name)" + (held != null ? $"; old file held {p.KeepDays} days" : string.Empty)
             : "Original replaced by " + Path.GetFileName(p.Final) + " (new file type, so Jellyfin lists it as a new item)" + (held != null ? $"; old file held {p.KeepDays} days" : string.Empty);
+        if (p.AudioTracks != null) outcome += $"; kept {p.AudioTracks.Length} of {p.SourceInfo?.AudioTracks} audio tracks";
+        if (p.Deinterlace) outcome += "; interlaced picture cleaned up";
+        outcome += p.LinkNote + p.SidecarNote;
         var histId = Record(p.Work, "Converted", outcome, p.SourceSize, outSize, p.Clock.Elapsed.TotalSeconds, Path.GetFileName(p.Final));
         if (carry != null) _mover.Register(carry, histId);
         _board.Rest("Idle", "Finished " + Path.GetFileName(p.Final));
@@ -751,6 +1162,7 @@ public sealed class ConversionService : BackgroundService
     private static string Hash(HandBrakeSettings hb)
     {
         var text = string.Join(' ', HandBrakeArgs.Build(hb, "in", "out"));
+        if (!string.IsNullOrWhiteSpace(hb.AudioLanguages)) text += " |audio-languages=" + hb.AudioLanguages.Trim().ToLowerInvariant();
         var hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(text));
         return Convert.ToHexString(hash, 0, 8);
     }
@@ -803,7 +1215,9 @@ public sealed class ConversionService : BackgroundService
     /// <summary>null = enough room; otherwise a message. The output is assumed to be at most as large as the source.</summary>
     private string? CheckSpace(PluginConfiguration cfg, string libraryDir, string src, long srcSize, bool usesHolding)
     {
-        var need = srcSize + Math.Max(0, cfg.MinFreeSpaceGb) * 1024L * 1024L * 1024L;
+        // Other conversions running right now will each still need room for their output.
+        long others; lock (_claimLock) others = _claims.Where(c => c.Key != src).Sum(c => c.Value);
+        var need = srcSize + others + Math.Max(0, cfg.MinFreeSpaceGb) * 1024L * 1024L * 1024L;
         try
         {
             var free = new DriveInfo(libraryDir).AvailableFreeSpace;

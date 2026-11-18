@@ -70,8 +70,6 @@ public class WatchDataMover
         catch (Exception ex) { _log.LogWarning(ex, "Could not read pending watch-data moves"); _pending = new(); }
     }
 
-    public int PendingCount { get { lock (_lock) return _pending.Count; } }
-
     // ------------------------------------------------------------------ late-bound access to Jellyfin services
 
     private object? Service(string typeName)

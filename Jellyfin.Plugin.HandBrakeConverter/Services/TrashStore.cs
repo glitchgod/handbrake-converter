@@ -15,6 +15,9 @@ public class TrashEntry
     public long Size { get; set; }
     public DateTime Trashed { get; set; } = DateTime.Now;
     public DateTime Expires { get; set; }
+
+    /// <summary>Subtitle files that sat next to the original and are now covered by the converted video; deleted together with the held original.</summary>
+    public List<string> RelatedFiles { get; set; } = new();
 }
 
 /// <summary>
@@ -75,7 +78,8 @@ public class TrashStore
     }
 
     /// <summary>Moves a file into the holding folder and records it. Returns the entry.</summary>
-    public TrashEntry Add(string sourcePath, int days, string holdingRoot)
+    /// <param name="copy">true = keep a real copy and leave the original file where it is (needed when the original is about to be overwritten in place).</param>
+    public TrashEntry Add(string sourcePath, int days, string holdingRoot, bool copy = false)
     {
         var root = holdingRoot;
         Directory.CreateDirectory(root);
@@ -85,10 +89,23 @@ public class TrashStore
         var folder = Path.Combine(root, entry.Id);
         Directory.CreateDirectory(folder);
         entry.TrashedPath = Path.Combine(folder, Path.GetFileName(sourcePath));
-        entry.Size = new FileInfo(sourcePath).Length;
-        File.Move(sourcePath, entry.TrashedPath); // same drive = rename; other drive = copy + delete
+        entry.Size = FileMeta.Length(sourcePath);
+        if (copy) File.Copy(sourcePath, entry.TrashedPath);
+        else File.Move(sourcePath, entry.TrashedPath); // same drive = rename; other drive = copy + delete
         lock (_lock) { _entries.Add(entry); Save(); }
         return entry;
+    }
+
+    /// <summary>Records the subtitle files to delete together with this held original.</summary>
+    public void SetRelated(string id, IEnumerable<string> files)
+    {
+        lock (_lock)
+        {
+            var e = _entries.FirstOrDefault(x => x.Id == id);
+            if (e == null) return;
+            e.RelatedFiles = files.ToList();
+            Save();
+        }
     }
 
     public List<TrashEntry> List()
@@ -115,8 +132,18 @@ public class TrashStore
         }
     }
 
-    private void Remove(TrashEntry e)
+    /// <param name="withRelated">also delete the subtitle files recorded with the entry (not when the original is being restored).</param>
+    private void Remove(TrashEntry e, bool withRelated = true)
     {
+        if (withRelated)
+        {
+            foreach (var f in e.RelatedFiles)
+            {
+                try { if (File.Exists(f)) File.Delete(f); }
+                catch (Exception ex) { _log.LogWarning(ex, "Could not remove related file {Path}", f); }
+            }
+        }
+
         try
         {
             if (File.Exists(e.TrashedPath)) File.Delete(e.TrashedPath);
@@ -161,7 +188,7 @@ public class TrashStore
 
             File.Move(e.TrashedPath, target);
             _state.MarkPath(target);
-            Remove(e);
+            Remove(e, withRelated: false);
             Save();
             return target;
         }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.HandBrakeConverter.Services;
@@ -42,6 +41,9 @@ public class StateStore
         public int Converted { get; set; }
         public int Skipped { get; set; }
         public bool Paused { get; set; }
+
+        /// <summary>Temporary files of conversions in progress, so ones left by a crash or power cut can be cleaned up at the next start.</summary>
+        public HashSet<string> ActiveTemps { get; set; } = new(StringComparer.Ordinal);
     }
 
     private void Load()
@@ -77,6 +79,27 @@ public class StateStore
     public string? SignatureOf(string path)
     {
         lock (_lock) return _data.Signatures.TryGetValue(path, out var s) ? s : null;
+    }
+
+    public void TrackTemp(string path)
+    {
+        lock (_lock) { if (_data.ActiveTemps.Add(path)) Save(); }
+    }
+
+    public void UntrackTemp(string path)
+    {
+        lock (_lock) { if (_data.ActiveTemps.Remove(path)) Save(); }
+    }
+
+    /// <summary>The temp files that were still marked active (the previous run died); clears the list.</summary>
+    public List<string> TakeStaleTemps()
+    {
+        lock (_lock)
+        {
+            var list = new List<string>(_data.ActiveTemps);
+            if (list.Count > 0) { _data.ActiveTemps.Clear(); Save(); }
+            return list;
+        }
     }
 
     public int FailureCount(string path)
