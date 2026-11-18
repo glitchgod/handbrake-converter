@@ -8,12 +8,12 @@
     "category": "General",
     "versions": [
       {
-        "version": "1.0.1.0",
-        "changelog": "Subtitles: keep only chosen languages plus forced tracks, convert text subtitles to SRT, and fix subtitles alone on already-converted files without re-encoding the video. Queue: each Auto-convert library is one row in the ordered list so manual jobs and automatic libraries can be mixed in any order, plus a Stop automatic and start now button.",
+        "version": "1.0.2.0",
+        "changelog": "Removing an item from the Jellyfin library while it converts now stops the conversion and removes what it made, same as deleting the file.",
         "targetAbi": "12.1.0.0",
-        "sourceUrl": "https://github.com/glitchgod/handbrake-converter/releases/download/v1.0.1.0/HandBrakeConverter_1.0.1.0.zip",
-        "checksum": "a1324b4c8f3767b0fa3998800004e3da",
-        "timestamp": "2026-11-16T17:32:08Z"
+        "sourceUrl": "https://github.com/glitchgod/handbrake-converter/releases/download/v1.0.2.0/HandBrakeConverter_1.0.2.0.zip",
+        "checksum": "e06b987dacb19e85e751b57d5716de3f",
+        "timestamp": "2026-11-18T15:05:01Z"
       }
     ]
   }
