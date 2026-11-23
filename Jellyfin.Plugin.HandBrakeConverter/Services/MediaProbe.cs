@@ -11,11 +11,20 @@ using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 
+/// <summary>One audio track as ffprobe sees it (codec_name such as "eac3", "truehd", "aac"; channel count, 0 when unknown; profile such
+/// as "Dolby Digital Plus + Dolby Atmos").</summary>
+public sealed record AudioStream(string Codec, int Channels, string Profile = "")
+{
+    /// <summary>Dolby Atmos or DTS:X: sound placed in 3D, which any re-encode flattens for good.</summary>
+    public bool ObjectAudio => Profile.Contains("Atmos", System.StringComparison.OrdinalIgnoreCase) || Profile.Contains("DTS:X", System.StringComparison.OrdinalIgnoreCase);
+}
+
 /// <summary>What ffprobe says about a video file.</summary>
 public sealed record MediaInfo(
     double Duration, int AudioTracks, int SubtitleTracks, int Chapters,
     string VideoCodec, string PixelFormat, string Transfer, bool DolbyVision, int Height = 0, System.Collections.Generic.IReadOnlyList<SubStream>? Subs = null,
-    System.Collections.Generic.IReadOnlyList<string>? AudioLangs = null, bool Interlaced = false)
+    System.Collections.Generic.IReadOnlyList<string>? AudioLangs = null, bool Interlaced = false, System.Collections.Generic.IReadOnlyList<AudioStream>? Audio = null,
+    System.Collections.Generic.IReadOnlyList<string>? Attachments = null)
 {
     /// <summary>HDR10 / PQ or HLG.</summary>
     public bool IsHdr => Transfer is "smpte2084" or "arib-std-b67";
@@ -127,12 +136,19 @@ public class MediaProbe
             st.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Object
                 ? tg.EnumerateObject().Where(pr => pr.Name.Equals("language", StringComparison.OrdinalIgnoreCase)).Select(pr => (pr.Value.GetString() ?? string.Empty).ToLowerInvariant()).FirstOrDefault() ?? string.Empty
                 : string.Empty).ToList();
+        var audio = streams.Where(x => Str(x, "codec_type") == "audio").Select(st =>
+            new AudioStream(Str(st, "codec_name").ToLowerInvariant(), st.TryGetProperty("channels", out var chv) && chv.ValueKind == JsonValueKind.Number ? chv.GetInt32() : 0, Str(st, "profile"))).ToList();
+        // Attached files (MKV): the fonts styled subtitles are drawn with, by file name.
+        var attachments = streams.Where(x => Str(x, "codec_type") == "attachment").Select(st =>
+            st.TryGetProperty("tags", out var tg) && tg.ValueKind == JsonValueKind.Object
+                ? tg.EnumerateObject().Where(pr => pr.Name.Equals("filename", StringComparison.OrdinalIgnoreCase)).Select(pr => pr.Value.GetString() ?? string.Empty).FirstOrDefault() ?? string.Empty
+                : string.Empty).Where(n => n.Length > 0).ToList();
         // field_order is tt/bb/tb/bt for interlaced video; progressive (or missing/unknown) means a normal picture.
         var fieldOrder = isVideo ? Str(video, "field_order") : string.Empty;
         var interlaced = fieldOrder is "tt" or "bb" or "tb" or "bt";
 
         return new MediaInfo(seconds, Count("audio"), Count("subtitle"), chapters,
             isVideo ? Str(video, "codec_name") : string.Empty, isVideo ? Str(video, "pix_fmt") : string.Empty, isVideo ? Str(video, "color_transfer") : string.Empty, dolby,
-            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0, subs, audioLangs, interlaced);
+            isVideo && video.TryGetProperty("height", out var hv) && hv.ValueKind == JsonValueKind.Number ? hv.GetInt32() : 0, subs, audioLangs, interlaced, audio, attachments);
     }
 }

@@ -45,43 +45,78 @@
         #HBConvPage .hbDays { display:flex; flex-wrap:wrap; column-gap:1em; }
         #HBConvPage .hbDays .checkboxContainer { margin-bottom:0; }
         #HBConvPage .hbSub { margin-left:1em; padding-left:1em; border-left:.2em solid #00a4dc; }
+        #HBConvPage .hbBad .selectLabel, #HBConvPage .hbBad .inputLabel, #HBConvPage .hbBad .emby-checkbox-label span { color:#e53935 !important; font-weight:700 !important; }
+        #HBConvPage .hbBad select, #HBConvPage .hbBad input { outline:2px solid #e53935; }
+        #HBConvPage .hbBadMsg, #HBConvPage .hbNoteBad { color:#e53935; font-weight:700; margin:.3em 0; }
+        #HBConvPage .hbNoteInfo { margin:.3em 0; opacity:.85; }
+        #HBConvPage details.hbFold { background:rgba(128,128,128,.08); border-radius:.4em; margin:.6em 0; padding:0 1.2em; }
+        #HBConvPage details.hbFold > summary { cursor:pointer; list-style:none; font-size:1.35em; font-weight:400; padding:.75em 0; display:flex; align-items:center; gap:.6em; }
+        #HBConvPage details.hbFold > summary::-webkit-details-marker { display:none; }
+        #HBConvPage details.hbFold > summary::before { content:'\25B8'; color:#00a4dc; transition:transform .15s; }
+        #HBConvPage details.hbFold[open] > summary::before { transform:rotate(90deg); }
+        #HBConvPage details.hbFold > summary .hbSumNote { font-size:.62em; opacity:.65; margin-left:auto; text-align:right; }
+        #HBConvPage details.hbFold[open] { padding-bottom:.8em; }
+        #HBConvPage details.hbFold > .fieldDescription:first-of-type { margin-bottom:1em; }
     </style>
     <div data-role="content">
         <div class="content-primary">
             <form id="HBConvForm">
             <h1 class="hbPageTitle">HandBrake Converter</h1>
             <div class="hbTabs" id="hbTabs">
-                <button type="button" class="hbTabBtn active" data-tab="overview">Overview</button>
-                <button type="button" class="hbTabBtn" data-tab="libraries">Libraries (auto-convert)</button>
-                <button type="button" class="hbTabBtn" data-tab="convert">Manual convert</button>
-                <button type="button" class="hbTabBtn" data-tab="queue">Queue</button>
-                <button type="button" class="hbTabBtn" data-tab="history">History</button>
-                <button type="button" class="hbTabBtn" data-tab="defaults">Default settings</button>
-                <button type="button" class="hbTabBtn" data-tab="originals">Original files</button>
-                <button type="button" class="hbTabBtn" data-tab="schedule">Schedule &amp; performance</button>
-                <button type="button" class="hbTabBtn" data-tab="tools">HandBrake &amp; tools</button>
-                <button type="button" class="hbTabBtn" data-tab="encoders">Encoder test</button>
+                <button type="button" class="hbTabBtn active" data-tab="status">Status</button>
+                <button type="button" class="hbTabBtn" data-tab="libraries">Libraries</button>
+                <button type="button" class="hbTabBtn" data-tab="convert">Convert titles</button>
+                <button type="button" class="hbTabBtn" data-tab="settings">Settings</button>
+                <button type="button" class="hbTabBtn" data-tab="tools">Tools</button>
             </div>
 
-            <!-- ============ OVERVIEW ============ -->
-            <div class="hbTab" data-tab="overview">
-                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Go to Encoder test</span></button></div>
+            <!-- ============ STATUS: what is happening, what is next, what happened ============ -->
+            <div class="hbTab" data-tab="status">
+                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Video encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Open Tools &gt; Encoder test</span></button></div>
                 <div class="hbBox">
                     <div id="hbStatus">Loading…</div>
                     <div class="hbBar"><div id="hbBar"></div></div>
                     <div id="hbWaiting" class="fieldDescription"></div>
                     <div id="hbStats" class="fieldDescription"></div>
                     <button is="emby-button" type="button" class="raised" id="hbPauseBtn"><span>Pause</span></button>
-                    <button is="emby-button" type="button" class="raised" id="hbDryBtn"><span>Preview what would be converted</span></button>
                     <span id="hbPauseNote" class="fieldDescription"></span>
-                    <div id="hbDry" style="display:none;margin-top:1em"></div>
                 </div>
                 <div class="hbPanel">
                 <div class="checkboxContainer checkboxContainer-withDescription">
                     <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="Enabled" /><span>Enable HandBrake Converter</span></label>
-                    <div class="fieldDescription checkboxFieldDescription">Master switch. When off, nothing converts: neither Auto-convert (Libraries tab) nor the Queue (Manual convert tab).</div>
+                    <div class="fieldDescription checkboxFieldDescription">Master switch. When off, nothing converts: neither Auto-convert (Libraries tab) nor the Queue (Convert titles tab).</div>
                 </div>
                 </div>
+
+                <details class="hbFold" data-sub="queue" open><summary>Queue</summary>
+                <div class="fieldDescription">Everything waiting, in the order it runs, one file at a time. An "Automatic · library" row stands for all of that library's waiting files and runs until it has nothing left, so manual jobs below it wait; use Top and the arrows to reorder, tick jobs to remove them, or Stop to end the running one.</div>
+                <div>
+                <div id="hbQueueTools">
+                    <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbSelAll" /><span>Select all</span></label>
+                    <button is="emby-button" type="button" class="raised" id="hbRemoveSel"><span>Remove selected</span></button>
+                </div>
+                <div id="hbQueue">Loading…</div>
+                </div>
+                </details>
+
+                <details class="hbFold" data-sub="history"><summary>History</summary>
+                <div class="fieldDescription">Every file converted, skipped or failed, newest first, with space saved, time taken, settings used, what happened to the original and why a file was skipped or failed; Retry puts a failed file back in line.</div>
+                <div>
+                    <div class="selectContainer">
+                        <label class="selectLabel" for="hbHistFilter">Show</label>
+                        <select is="emby-select" id="hbHistFilter" class="emby-select-withcolor emby-select">
+                            <option value="">Everything</option>
+                            <option value="Converted">Converted</option>
+                            <option value="Skipped">Skipped</option>
+                            <option value="Failed">Failed</option>
+                        </select>
+                        <div class="fieldDescription">Only list files with this result. The last 500 results are kept.</div>
+                    <div id="hbHistSummary" class="fieldDescription" style="margin:.4em 0"></div>
+                    </div>
+                    <div id="hbHistory">Loading…</div>
+                    <button is="emby-button" type="button" class="raised" id="hbHistClear"><span>Clear history</span></button>
+                </div>
+                </details>
             </div>
 
             <!-- ============ LIBRARIES ============ -->
@@ -90,7 +125,7 @@
                 <div id="hbLibs">Loading libraries…</div>
                 <div class="verticalSection">
                     <h2 class="sectionTitle">Never auto-convert these</h2>
-                    <div class="fieldDescription">Movies, series, seasons or episodes you excluded (use the Exclude button in Manual convert). Auto-convert skips everything inside them. You can still convert them by hand.</div>
+                    <div class="fieldDescription">Movies, series, seasons or episodes you excluded (use the Exclude button in Convert titles). Auto-convert skips everything inside them. You can still convert them by hand.</div>
                     <div id="hbExcluded" class="fieldDescription">None.</div>
                 </div>
             </div>
@@ -123,18 +158,19 @@
                 </div>
                 <div class="verticalSection" id="hbConvOptions" style="display:none">
                     <h2 class="sectionTitle">Convert: <span id="hbConvWhat"></span></h2>
-                    <div class="fieldDescription">Starts from the settings of the title's library (or the Default settings). Changes here only apply to this job.</div>
+                    <div class="fieldDescription">Starts from the settings of the title's library (or Conversion settings). Changes here only apply to this job.</div>
                     <div id="hbConvProfile"></div>
                     <div class="verticalSection">
                         <h2 class="sectionTitle">Start</h2>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbRunNow" /><span>Start immediately, ignoring the schedule</span></label>
-                            <div class="fieldDescription checkboxFieldDescription">Only matters if you limited conversions to certain times on the Schedule tab.</div>
+                            <div class="fieldDescription checkboxFieldDescription">Only matters if you limited conversions to certain times in Settings &gt; Schedule &amp; performance.</div>
                         </div>
                         <div class="checkboxContainer checkboxContainer-withDescription">
                             <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbForce" /><span>Convert again even if already done</span></label>
                             <div class="fieldDescription checkboxFieldDescription">Normally a file that was already converted with these same settings is skipped and marked finished without encoding. Tick this to encode it again anyway.</div>
                         </div>
+                        <div id="hbConvNote"></div>
                         <button is="emby-button" type="button" class="raised button-submit" id="hbQueueBtn"><span>Add to queue</span></button>
                         <button is="emby-button" type="button" class="raised" id="hbQueueCancel"><span>Cancel</span></button>
                         <span id="hbQueueMsg"></span>
@@ -142,50 +178,16 @@
                 </div>
             </div>
 
-            <!-- ============ QUEUE ============ -->
-            <div class="hbTab" data-tab="queue" style="display:none">
-                <div class="fieldDescription">Everything that will be converted, in the order it will run, one file at a time. Each library with Auto-convert on has one row of its own ("Automatic · library") that stands for all of its waiting files, so you can put it above, between or below your manual jobs, for example your priority shows first, then the automatic library, then more manual ones. A row runs until it has nothing left, so manual jobs below an automatic row wait for that whole library; move them up to run sooner. New manual jobs are added just above the first automatic row. Finished conversions leave this list and appear under History. Use Top and the arrows to change the order, tick manual jobs to remove several at once, or press Stop to end the running one.</div>
-                <div class="verticalSection">
-                <h2 class="sectionTitle">Order of work</h2>
-                <div id="hbQueueTools">
-                    <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="hbSelAll" /><span>Select all</span></label>
-                    <button is="emby-button" type="button" class="raised" id="hbRemoveSel"><span>Remove selected</span></button>
-                </div>
-                <div id="hbQueue">Loading…</div>
-                </div>
-            </div>
-
-            <!-- ============ HISTORY ============ -->
-            <div class="hbTab" data-tab="history" style="display:none">
-                <div class="fieldDescription">A log of every file the plugin converted, skipped or failed, newest first: space saved, time taken, the settings used, what happened to the original (replaced in place, or kept next to a "- HandBrake" copy), the resulting file name and why a file was skipped or failed. Retry puts a failed file back in line.</div>
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">Results</h2>
-                    <div class="selectContainer">
-                        <label class="selectLabel" for="hbHistFilter">Show</label>
-                        <select is="emby-select" id="hbHistFilter" class="emby-select-withcolor emby-select">
-                            <option value="">Everything</option>
-                            <option value="Converted">Converted</option>
-                            <option value="Skipped">Skipped</option>
-                            <option value="Failed">Failed</option>
-                        </select>
-                        <div class="fieldDescription">Only list files with this result. The last 500 results are kept.</div>
-                    <div id="hbHistSummary" class="fieldDescription" style="margin:.4em 0"></div>
-                    </div>
-                    <div id="hbHistory">Loading…</div>
-                    <button is="emby-button" type="button" class="raised" id="hbHistClear"><span>Clear history</span></button>
-                </div>
-            </div>
-
-            <!-- ============ DEFAULT SETTINGS ============ -->
-            <div class="hbTab" data-tab="defaults" style="display:none">
-                <div class="fieldDescription">The conversion settings every library uses unless it has its own, and the starting point for Manual convert. Choose quality, audio, subtitles, file format and what happens to the original.</div>
-                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Go to Encoder test</span></button></div>
+            <!-- ============ SETTINGS: conversion, original files, schedule ============ -->
+            <div class="hbTab" data-tab="settings" style="display:none">
+                <details class="hbFold" data-sub="defaults" open><summary>Conversion settings <span class="hbSumNote">video, audio, subtitles, format</span></summary>
+                <div class="fieldDescription">The conversion settings every library uses unless it has its own, and the starting point for Convert titles. Choose quality, audio, subtitles, file format and what happens to the original.</div>
+                <div class="hbBox hbNotice hbEncNotice" style="display:none"><b>Find out what this server can do.</b> Run the encoder test once, so encoders that don't work here are marked "- not supported" in the Video encoder dropdown. <button is="emby-button" type="button" class="raised hbGoEncTest"><span>Open Tools &gt; Encoder test</span></button></div>
                 <div id="hbDefaults"></div>
-            </div>
+                </details>
 
-            <!-- ============ ORIGINAL FILES ============ -->
-            <div class="hbTab" data-tab="originals" style="display:none">
-                <div class="fieldDescription">Rules for looking after your original files: what to check before and after a conversion, and how long replaced originals are kept so you can undo them. Whether a library keeps or replaces its originals is chosen in <b>Default settings</b> (or a library's own settings) under "Original file".</div>
+                <details class="hbFold" data-sub="originals"><summary>Original files <span class="hbSumNote">checks, undo, files on hold</span></summary>
+                <div class="fieldDescription">Rules for looking after your original files: what to check before and after a conversion, and how long replaced originals are kept so you can undo them. Whether a library keeps or replaces its originals is chosen in <b>Conversion settings</b> (or a library's own settings) under "Original file".</div>
 
                 <div class="verticalSection">
                     <h2 class="sectionTitle">1. Before converting</h2>
@@ -222,6 +224,10 @@
                     <div class="checkboxContainer checkboxContainer-withDescription">
                         <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="SkipIfNotSmaller" /><span>Only accept the converted file if it is smaller than the original</span></label>
                         <div class="fieldDescription checkboxFieldDescription">Skipped for manual conversions that keep the original or burn in subtitles, since those are deliberate.</div>
+                    </div>
+                    <div class="checkboxContainer checkboxContainer-withDescription">
+                        <label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" id="SkipSameFormat" /><span>Auto-convert skips videos already in the chosen format</span></label>
+                        <div class="fieldDescription checkboxFieldDescription">For example an H.265 file when the encoder is H.265: re-encoding it takes hours and mostly loses quality; titles you convert by hand are always converted.</div>
                     </div>
                     <div class="selectContainer">
                         <label class="selectLabel" for="LinkedFiles">Files that are hard-linked or symbolic links</label>
@@ -275,10 +281,9 @@
                     <div class="fieldDescription">Restore puts the original back next to the converted file as "Name - Original", which Jellyfin shows as a second version.</div>
                     <div id="hbTrash"></div>
                 </div>
-            </div>
+                </details>
 
-            <!-- ============ SCHEDULE & PERFORMANCE ============ -->
-            <div class="hbTab" data-tab="schedule" style="display:none">
+                <details class="hbFold" data-sub="schedule"><summary>Schedule &amp; performance <span class="hbSumNote">when it runs, pausing for viewers</span></summary>
                 <div class="fieldDescription">Choose when conversions are allowed to run, and how they behave while running, such as pausing when someone is watching. Leave time limits off to convert whenever there is something to do.</div>
                 <div class="verticalSection">
                     <h2 class="sectionTitle">When to convert</h2>
@@ -341,54 +346,83 @@
                     </div>
                     </div>
                 </div>
+                </details>
             </div>
 
-            <!-- ============ ENCODER TEST ============ -->
-            <div class="hbTab" data-tab="encoders" style="display:none">
-                <div class="fieldDescription">Optional. Shows the video encoders this HandBrake can use on this server, and lets you check that one really works before you pick it in Default settings. You never need this for the usual software encoders (x264, x265); it is mainly for hardware encoders.</div>
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">Video encoders</h2>
-                    <div class="fieldDescription">Hardware encoders (NVENC for NVIDIA, QSV for Intel) only appear here when HandBrake finds the hardware. HandBrake can list one even when its driver is broken, which is what the test is for.</div>
-                    <div style="margin:.6em 0;"><button is="emby-button" type="button" class="raised" id="hbEncAll"><span>Test all encoders</span></button> <span id="hbEncAllMsg" class="fieldDescription"></span></div>
-                    <div class="fieldDescription">Test all runs the test on every encoder below, one after another. Once results exist the button becomes Retest all. Encoders that fail are marked "- not supported" in the Encoder dropdown (Default settings, a library's own settings, Manual convert); encoders that work, or were never tested, are left unmarked.</div>
-                    <div id="hbEncoders">Checking…</div>
-                </div>
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">What Test does</h2>
-                    <div class="fieldDescription">Test makes a 2-second sample video, converts it with that encoder, and tells you if it worked or why it failed. It takes a few seconds, does not touch your library or any of your files, and deletes the sample afterwards.</div>
-                </div>
-            </div>
-
-            <!-- ============ HANDBRAKE & TOOLS ============ -->
+            <!-- ============ TOOLS ============ -->
             <div class="hbTab" data-tab="tools" style="display:none">
-                <div class="fieldDescription">Checks that HandBrake is installed, and holds the housekeeping for Auto-convert: how often a failing file is retried, a preview of what it will process next, and a way to start its history over.</div>
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">HandBrake</h2>
+                <div class="fieldDescription">Checks and previews that never change your files: whether HandBrake is installed, which encoders work on this server, what Auto-convert would do next, and a check of any single title.</div>
+
+                <details class="hbFold"><summary>HandBrake</summary>
                     <div class="fieldDescription">HandBrake is the program that does the actual converting. This checks that it is installed on the server.</div>
                     <div id="hbHbStatus" style="margin:.6em 0;">Checking…</div>
                     <div style="margin-bottom:.6em;"><button is="emby-button" type="button" class="raised" id="hbCheckBtn"><span>Check again</span></button></div>
                     <div class="inputContainer"><label class="inputLabel inputLabelUnfocused" for="HandBrakePath">HandBrakeCLI location (optional full path)</label>
                         <input is="emby-input" type="text" id="HandBrakePath" />
                         <div class="fieldDescription">Only needed if HandBrakeCLI is installed somewhere unusual. Leave blank and the plugin finds it by itself. Press Save before checking again if you change this.</div></div>
-                </div>
+                </details>
 
-                <div class="verticalSection">
-                    <h2 class="sectionTitle">Auto-convert</h2>
-                    <div class="fieldDescription">Settings for the background conversion of whole libraries (switched on per library in the Libraries tab).</div>
+                <details class="hbFold" id="hbEncSection"><summary>Encoder test</summary>
+                    <div class="fieldDescription">Lists the video encoders this HandBrake offers on this server and proves each one works with a 2-second sample encode (a few seconds each; your library is not touched and the sample is deleted). Hardware encoders (NVENC for NVIDIA, QSV for Intel) only appear when HandBrake finds the hardware, and can be listed even when the driver is broken, which is what the test catches.</div>
+                    <div style="margin:.6em 0;"><button is="emby-button" type="button" class="raised" id="hbEncAll"><span>Test all encoders</span></button> <span id="hbEncAllMsg" class="fieldDescription"></span></div>
+                    <div class="fieldDescription">Encoders that fail are marked "- not supported" in every Video encoder dropdown and are never suggested; encoders that pass or were never tested are left unmarked.</div>
+                    <div id="hbEncoders">Checking…</div>
+                </details>
+
+                <details class="hbFold"><summary>Check a title</summary>
+                    <div class="fieldDescription">Pick a movie or episode to see its video, audio and subtitles as they are now, what the current settings would turn each into (press Save first after changing them), whether the subtitles keep their look, and how the title has played so far, including the reason Jellyfin gave whenever it had to convert it while someone watched.</div>
+                    <div class="hbRow">
+                        <div class="selectContainer grow" style="margin-bottom:0"><label class="selectLabel" for="hbSubLib">Library</label><select is="emby-select" id="hbSubLib" class="emby-select-withcolor emby-select"></select></div>
+                        <div class="inputContainer grow" style="margin-bottom:0"><label class="inputLabel inputLabelUnfocused" for="hbSubSearch">Search</label><input is="emby-input" type="text" id="hbSubSearch" /></div>
+                        <button is="emby-button" type="button" class="raised" id="hbSubGo"><span>Search</span></button>
+                    </div>
+                    <div id="hbSubCrumbs" style="margin:.5em 0"></div>
+                    <div id="hbSubList" style="max-height:20em;overflow:auto"></div>
+                    <div id="hbSubResult" style="display:none;margin-top:1em"></div>
+                </details>
+
+                <details class="hbFold"><summary>Update suggestions</summary>
+                    <div class="fieldDescription">Every time Jellyfin has to convert a video while someone watches, it writes a log. This reads the newest ones (up to the number below), shows what each one says Jellyfin had to change (video, audio, subtitles), and works the "(suggested from your playback)" marks in the dropdowns out again from that. Nothing is changed in your settings; the marks only point at a choice.</div>
+                    <div class="hbRow">
+                        <div class="inputContainer" style="margin-bottom:0;max-width:10em"><label class="inputLabel inputLabelUnfocused" for="hbSugLimit">Logs to read</label><input is="emby-input" type="number" id="hbSugLimit" min="1" max="1000" value="100" /></div>
+                        <button is="emby-button" type="button" class="raised" id="hbSugGo"><span>Check the logs</span></button>
+                    </div>
+                    <progress id="hbSugBar" max="1" value="0" style="width:100%;display:none;margin-top:.6em"></progress>
+                    <div id="hbSugMsg" class="fieldDescription" style="margin-top:.4em"></div>
+                    <div id="hbSugLogs" style="max-height:14em;overflow:auto"></div>
+                    <div id="hbSugResult"></div>
+                </details>
+
+                <details class="hbFold"><summary>Repair giant subtitles</summary>
+                    <div class="fieldDescription">Earlier versions of this plugin could leave subtitles that some players draw giant (a line can fill a quarter of the screen): MP4 text that kept a styled track's font size, and SRT carrying font size tags. This looks through every MP4 and MKV in your libraries (and the .srt files next to them) and repairs what it finds: the text keeps its lines, timing and italics but loses the stored font size, so it is drawn at your Jellyfin subtitle size (in MP4 files the subtitles become .srt files next to the video). The video and audio are not touched and nothing is re-encoded; the replaced file is held in Original files like any other.</div>
+                    <button is="emby-button" type="button" class="raised" id="hbGiantScan"><span>Find files with giant subtitles</span></button>
+                    <button is="emby-button" type="button" class="raised" id="hbGiantFix" style="display:none"><span>Repair them</span></button>
+                    <div id="hbGiantMsg" class="fieldDescription" style="margin-top:.5em"></div>
+                    <div id="hbGiantList" style="max-height:14em;overflow:auto"></div>
+                </details>
+
+                <details class="hbFold"><summary>Preview Auto-convert</summary>
+                    <div class="fieldDescription">Shows what Auto-convert would do with the libraries that have it switched on (press Save first after changing them): how many files, the estimated space saved and time, and the order they would run in. Nothing is converted.</div>
+                    <button is="emby-button" type="button" class="raised" id="hbDryBtn"><span>Preview</span></button>
+                    <button is="emby-button" type="button" class="raised" id="hbPendingBtn"><span>List the next 100 files</span></button>
+                    <div id="hbDry" style="display:none;margin-top:1em"></div>
+                    <pre id="hbPending" style="white-space:pre-wrap;max-height:14em;overflow:auto;display:none;"></pre>
+                </details>
+
+                <details class="hbFold"><summary>Auto-convert housekeeping</summary>
+                    <div class="fieldDescription">Retry limits and a way to start Auto-convert's memory over.</div>
                     <div class="inputContainer">
                         <label class="inputLabel inputLabelUnfocused" for="MaxFailures">Stop retrying a file after this many failed attempts</label>
                         <input is="emby-input" type="number" id="MaxFailures" min="1" />
                         <div class="fieldDescription">Applies to Auto-convert only. A file that keeps failing is skipped so it can't block the rest.</div>
                     </div>
-                    <div class="fieldDescription">Lists the files Auto-convert will pick up next, so you can check it before it starts.</div>
-                    <button is="emby-button" type="button" class="raised" id="hbPendingBtn"><span>Show what Auto-convert would process</span></button>
-                    <button is="emby-button" type="button" class="raised" id="hbResetBtn"><span>Forget converted history</span></button>
-                    <div class="fieldDescription">Forgetting history lets already-converted files be converted again.</div>
-                    <pre id="hbPending" style="white-space:pre-wrap;max-height:14em;overflow:auto;display:none;"></pre>
-                </div>
+                    <button is="emby-button" type="button" class="raised" id="hbResetBtn"><span>Forget converted files</span></button>
+                    <div class="fieldDescription">Auto-convert forgets which files it already converted or skipped, so they can be converted again. Your files and History are not touched.</div>
+                </details>
             </div>
 
             <div class="verticalSection" id="hbSaveBar">
+                <div id="hbSaveNote"></div>
                 <button is="emby-button" type="submit" class="raised button-submit block emby-button" id="hbSave"><span>Save</span></button>
             </div>
             </form>
@@ -399,7 +433,7 @@
     (function () {
         var pluginId = '6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90';
         var page = document.querySelector('#HBConvPage');
-        var cfg = null, folders = [], timer = null, activeTab = 'overview';
+        var cfg = null, folders = [], timer = null, activeTab = 'status';
         var conv = { libId: '', stack: [], selected: {}, names: {} };
         var DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         var ENCODERS = [['x265', 'x265 (CPU, HEVC)'], ['x264', 'x264 (CPU, H.264)'], ['svt_av1', 'SVT-AV1 (CPU)'],
@@ -415,7 +449,7 @@
             qsv_h265: 'QSV H.265 (Intel)', qsv_h265_10bit: 'QSV H.265 10-bit (Intel)', qsv_h264: 'QSV H.264 (Intel)', qsv_av1: 'QSV AV1 (Intel Arc)', qsv_av1_10bit: 'QSV AV1 10-bit (Intel Arc)'
         };
         var installedEncoders = null; // names HandBrake lists on this server, or null when unknown
-        var encoderTests = {};        // saved results of the Encoder test tab: name -> { Ok, Message }
+        var encoderTests = {};        // saved results of Tools > Encoder test: name -> { Ok, Message }
         function encoderBad(n) { return !!(encoderTests[n] && encoderTests[n].Ok === false); }
         function encoderOptions(current) {
             var known = installedEncoders && installedEncoders.length;
@@ -424,13 +458,29 @@
             if (current && names.indexOf(current) < 0) opts.push([current, (ENC_LABELS[current] || current) + (known ? ' (not installed here)' : '')]);
             return opts;
         }
-        // Marks the recommended choice in a dropdown: what Jellyfin's transcode logs point to when they have a clear answer, else a sensible default
+        // Marks exactly one choice per dropdown as suggested: what your own playback points to (Jellyfin's transcode reasons and logs, see
+        // the reason is shown when hovering the dropdown) when there is evidence for that setting, otherwise a sensible default.
         function S(opts, val, key) {
             // Never recommend something the Encoder test found unsupported on this server.
             function usable(o, v) { return String(o[0]) === String(v) && o[1].indexOf(' - not supported') < 0; }
             var fromLogs = key && playbackSug[key] != null && opts.some(function (o) { return usable(o, playbackSug[key]); });
             var pick = fromLogs ? playbackSug[key] : val;
-            return opts.map(function (o) { return usable(o, pick) ? [o[0], o[1] + (fromLogs ? ' (suggested from your playback)' : ' (suggested)')] : o; });
+            var r = opts.map(function (o) { return usable(o, pick) ? [o[0], o[1] + (fromLogs ? ' (suggested from your playback)' : ' (suggested)')] : o; });
+            r.sugDef = val; // lets refreshMarks() move the mark later without redrawing the page
+            return r;
+        }
+        // Moves the "(suggested…)" marks in every dropdown on the page to what the suggestions now say, keeping what you picked.
+        function refreshMarks() {
+            $$('select[data-k][data-def]').forEach(function (s) {
+                var k = s.getAttribute('data-k'), def = s.getAttribute('data-def');
+                var opts = Array.prototype.slice.call(s.options);
+                opts.forEach(function (o) { o.textContent = o.textContent.replace(/ \(suggested[^)]*\)/, ''); });
+                function usable(v) { return opts.filter(function (o) { return o.value === String(v) && o.textContent.indexOf(' - not supported') < 0; })[0]; }
+                var fromLogs = playbackSug[k] != null ? usable(playbackSug[k]) : null;
+                var o = fromLogs || usable(def);
+                if (o) o.textContent += fromLogs ? ' (suggested from your playback)' : ' (suggested)';
+                if (fromLogs) s.title = 'Suggested from your playback: ' + playbackWhy[k]; else s.removeAttribute('title');
+            });
         }
         var HIDE_TYPES = ['music', 'books', 'playlists', 'livetv', 'boxsets'];
 
@@ -455,7 +505,8 @@
         function desc(d) { return d ? '<div class="fieldDescription">' + d + '</div>' : ''; }
         function sel(k, label, opts, val, d) {
             var id = nid();
-            return '<div class="selectContainer"><label class="selectLabel" for="' + id + '">' + esc(label) + '</label><select is="emby-select" id="' + id + '" data-k="' + k + '" class="emby-select-withcolor emby-select">' +
+            var why = playbackWhy[k] && opts.some(function (o) { return o[1].indexOf('(suggested from your playback)') >= 0; }) ? ' title="' + esc('Suggested from your playback: ' + playbackWhy[k]) + '"' : '';
+            return '<div class="selectContainer"><label class="selectLabel" for="' + id + '">' + esc(label) + '</label><select is="emby-select" id="' + id + '" data-k="' + k + '"' + why + (opts.sugDef != null ? ' data-def="' + esc(opts.sugDef) + '"' : '') + ' class="emby-select-withcolor emby-select">' +
                 opts.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(o[0]) === String(val) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>' + desc(d) + '</div>';
         }
         function num(k, label, val, min, d) {
@@ -488,48 +539,122 @@
             return '<label class="emby-checkbox-label"><input is="emby-checkbox" type="checkbox" class="' + cls + '" ' + attrs + (checked ? ' checked' : '') + ' /><span>' + esc(label) + '</span></label>';
         }
 
+        // ---------------------------------------------------------------- Quick apply
+        // What each official Jellyfin app plays directly, from Jellyfin's codec support page (jellyfin.org/docs/general/clients/codec-support)
+        // where it covers the app, otherwise from the app's own notes. Only settings that decide direct play are set; quality, speed,
+        // languages and what happens to originals are never touched. Nothing is saved until you press Save.
+        var PLATFORMS = [
+            { id: 'all', name: 'Every device (most compatible)', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'aac', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'srt' },
+              why: 'H.264 8-bit and AAC are the only video and audio formats every official app plays; MP4 is the one container they all open; HDR files are left alone (most apps can\'t show HDR, and Jellyfin converts it to SDR for them while streaming).' },
+            { id: 'web', name: 'Web browsers (Chrome, Edge, Firefox, Safari)', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'aac_51', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Chrome and Firefox play H.265 only on some systems and can\'t play AC3, E-AC3 or DTS; AAC plays everywhere; Firefox and Safari can\'t open MKV; the web player draws styled subtitles itself.' },
+            { id: 'android', name: 'Jellyfin for Android (phones, tablets)', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'H.264 plays on every Android device, H.265 only on some; every listed audio format (AC3, E-AC3, DTS, FLAC...) plays, so audio is copied; MKV plays.' },
+            { id: 'androidtv_hd', name: 'Jellyfin for Android TV / Fire TV (HD models)', set: { Encoder: 'x265', BitDepth: '8bit', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: '8-bit H.265 plays on every Android TV, 10-bit only on some; HD models (Fire TV Stick HD/Lite, older boxes) stop at 1080p, so bigger videos are shrunk; all listed audio except Vorbis plays, so audio is copied; HDR files are left alone.' },
+            { id: 'androidtv_4k', name: 'Jellyfin for Android TV / Fire TV (4K models)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: '4K models (Fire TV Stick 4K, Shield, Google TV 4K) decode H.265 Main 10 up to 4K, so 10-bit and resolution are kept; all listed audio except Vorbis plays, so audio is copied; HDR depends on the model and TV, so HDR files are left alone.' },
+            { id: 'ios', name: 'Jellyfin for iOS / iPadOS', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'keep', AudioMode: 'copy', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'H.265 8- and 10-bit play, 10-bit H.264, VP9 and AV1 don\'t; HDR plays in the iOS app; DTS doesn\'t, and MP4 turns DTS and TrueHD into AAC with the same channels while copying the rest.' },
+            { id: 'swiftfin', name: 'Swiftfin (iPhone, iPad)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'H.264 and H.265 (8- and 10-bit) and every listed audio format play; HDR is listed for the iOS app, not Swiftfin, so HDR files are left alone.' },
+            { id: 'swiftfin_atvhd', name: 'Swiftfin (Apple TV HD)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Apple lists H.265 (Main and Main 10) only up to 1080p at 30 fps on Apple TV HD, with no HDR, so bigger videos are shrunk to 1080p and HDR files are left alone; 60 fps H.265 may still be converted while streaming.' },
+            { id: 'swiftfin_atv4k', name: 'Swiftfin (Apple TV 4K)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Apple TV 4K plays H.265 (8- and 10-bit) up to 4K 60 fps, so resolution and 10-bit are kept; HDR is listed for the iOS app, not Swiftfin, so HDR files are left alone.' },
+            { id: 'roku', name: 'Jellyfin for Roku (HD models)', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'aac', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'srt' },
+              why: 'H.264 8-bit plays on every Roku, H.265 only on 4K models and 10-bit H.264 on none; AC3/E-AC3 play only on Roku TVs or through a receiver, AAC everywhere (stereo, so surround becomes stereo); Roku can\'t draw styled (ASS) subtitles or show PGS, only SRT.' },
+            { id: 'roku_4k', name: 'Jellyfin for Roku (4K models)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'aac', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'srt' },
+              why: 'Roku 4K models play H.265 Main 10 up to 4K, so 10-bit and resolution are kept; HDR depends on the model (HDR10 or Dolby Vision), so HDR files are left alone; audio and subtitles have the same limits as every Roku: AAC stereo and SRT only.' },
+            { id: 'kodi', name: 'Kodi (Jellyfin for Kodi, JellyCon)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Kodi plays every listed video and audio format and every subtitle type, so everything is kept as it is; HDR files are left alone (Kodi plays them as they are).' },
+            { id: 'jmp', name: 'Jellyfin Media Player (desktop)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'skip', AudioMode: 'copy', Container: 'source', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'The desktop app plays every listed video and audio format and every subtitle type, so everything is kept as it is.' },
+            { id: 'webos', name: 'Jellyfin for LG webOS', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep_srt' },
+              why: 'Not in Jellyfin\'s tables: the webOS app uses the TV\'s web player, which often won\'t direct play H.265; Jellyfin\'s docs advise MP4 over MKV on webOS; DTS is missing on many LG models, and MP4 turns DTS and TrueHD into AAC; a simple text copy is added for styled subtitles.' },
+            { id: 'tizen', name: 'Jellyfin for Samsung Tizen', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep_srt' },
+              why: 'Not in Jellyfin\'s tables: the Tizen app uses the TV\'s web player; Samsung TVs don\'t play DTS or TrueHD, and MP4 turns those into AAC; a simple text copy is added for styled subtitles.' },
+            { id: 'xbox_one', name: 'Jellyfin for Xbox (original Xbox One)', set: { Encoder: 'x264', BitDepth: '8bit', H264Level: '4.1', MaxHeight: 1080, HdrMode: 'skip', AudioMode: 'copy', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Not in Jellyfin\'s tables: Microsoft says the original Xbox One has no hardware H.265 decoder and is limited to 1080p, so H.264 1080p is used; the Edge web player plays AC3 and E-AC3 but not DTS, and MP4 turns DTS and TrueHD into AAC.' },
+            { id: 'xbox', name: 'Jellyfin for Xbox (One S, One X, Series S/X)', set: { Encoder: 'x265', BitDepth: 'source', MaxHeight: 0, HdrMode: 'keep', AudioMode: 'copy', Container: 'mp4', SubtitleMode: 'keep', SubtitleStyled: 'keep' },
+              why: 'Not in Jellyfin\'s tables: Microsoft says 4K and HDR10 play from the Xbox One S onward, and the Xbox app added full 4K, HDR and H.265 support in version 0.9.3 (needs Jellyfin 10.11 or newer); it uses the Edge web player, which plays AC3 and E-AC3 but not DTS, and MP4 turns DTS and TrueHD into AAC.' }
+        ];
+        var QA_LABELS = { Encoder: 'Video encoder', BitDepth: '10-bit videos', H264Level: 'H.264 compatibility level', MaxHeight: 'Resolution', HdrMode: 'HDR videos', AudioMode: 'Audio', Container: 'Container', SubtitleMode: 'Subtitles', SubtitleStyled: 'Subtitle look' };
+        function quickApplyHtml() {
+            return '<div class="verticalSection hbQuick"><div class="selectContainer"><label class="selectLabel">Quick apply: set up for a Jellyfin app</label>' +
+                '<select is="emby-select" class="emby-select-withcolor emby-select hbQuickSel"><option value="">Choose an app…</option>' +
+                PLATFORMS.map(function (p) { return '<option value="' + p.id + '">' + esc(p.name) + '</option>'; }).join('') + '</select>' +
+                desc('Sets the video, audio, subtitle and container options below to what that app plays directly, based on Jellyfin\'s codec support list; quality, speed, languages and originals are left alone, and nothing is saved until you press Save.') +
+                '<div class="hbQuickNote fieldDescription"></div></div></div>';
+        }
+        function quickApply(profile, id) {
+            var pf = PLATFORMS.filter(function (x) { return x.id === id; })[0];
+            if (!pf) return;
+            var changed = [];
+            Object.keys(pf.set).forEach(function (key) {
+                var el = profile.querySelector('[data-k="hb.' + key + '"]');
+                if (!el) return;
+                var v = String(pf.set[key]);
+                if (el.tagName === 'SELECT' && !Array.prototype.some.call(el.options, function (o) { return o.value === v; })) return;
+                if (el.value === v) return;
+                el.value = v;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                changed.push((QA_LABELS[key] || key) + ': ' + (el.selectedOptions && el.selectedOptions[0] ? el.selectedOptions[0].textContent.replace(/ \(suggested[^)]*\)/, '') : v));
+            });
+            var enc = profile.querySelector('[data-k="hb.Encoder"]');
+            var missing = enc && enc.selectedOptions[0] && enc.selectedOptions[0].textContent.indexOf(' - not supported') >= 0;
+            $('.hbQuickNote', profile).innerHTML = '<b>' + esc(pf.name) + '</b>: ' + esc(pf.why) +
+                '<br>' + (changed.length ? 'Changed: ' + changed.map(esc).join(' · ') : 'Everything already matched.') + ' Press Save to keep it.' +
+                (missing ? '<br><b style="color:#e53935">The encoder this app needs failed the encoder test on this server.</b>' : '');
+        }
+        page.addEventListener('change', function (e) {
+            var t = e.target;
+            if (!t || !t.classList || !t.classList.contains('hbQuickSel') || !t.value) return;
+            quickApply(t.closest('.hbProfile'), t.value);
+            t.value = '';
+        });
+
         function profileHtml(p) {
             p = p || {}; var h = p.HandBrake || {};
             var burn = (h.SubtitleMode === 'burn');
-            return '<div class="hbProfile">' +
+            return '<div class="hbProfile">' + quickApplyHtml() +
                 '<div class="verticalSection"><h2 class="sectionTitle">Video</h2>' + desc('How the picture is re-encoded.') +
                     sel('hb.Encoder', 'Video encoder', S(encoderOptions(h.Encoder || 'x265'), 'x265', 'hb.Encoder'), h.Encoder || 'x265', 'x265 makes the smallest files. NVENC/QSV use your graphics card but only work if the server has a supported graphics card and drivers.') +
                     num('hb.Quality', 'Quality (lower number = better quality, bigger file)', h.Quality == null ? 22 : h.Quality, 0, 'Around 20–24 is a good range for x265 and x264.') +
                     sel('hb.EncoderPreset', 'Encoding speed (x264, x265, SVT-AV1 only)', S(SPEEDS, 'fast'), h.EncoderPreset || 'medium', 'Slower = smaller file for the same quality.') +
-                    sel('hb.H264Level', 'H.264 compatibility level (x264 only)', S([['4.1', '4.1: plays directly on almost every device'], ['4.2', '4.2'], ['auto', 'Automatic (can end up too high for many devices)']], '4.1'), h.H264Level || '4.1',
+                    sel('hb.H264Level', 'H.264 compatibility level (x264 only)', S([['4.1', '4.1: plays directly on almost every device'], ['4.2', '4.2'], ['auto', 'Automatic (can end up too high for many devices)']], '4.1', 'hb.H264Level'), h.H264Level || '4.1',
                         'The highest H.264 level the video is allowed to use. At 4.1 nearly every TV, phone and browser plays the file as it is. If it is set higher (extra options like ref=5 do this on their own: level 5.0), devices that stop at 4.2 make Jellyfin re-encode the video live every time it is played. Only applies to x264, and not above 1080p.') +
                     sel('hb.MaxHeight', 'Resolution', S(HEIGHTS, 1080, 'hb.MaxHeight'), h.MaxHeight || 0, 'A "max" setting only shrinks bigger videos. Smaller ones are never enlarged. 1080p max is a good balance: 4K files take several times longer to convert.') +
-                    sel('hb.HdrMode', 'HDR videos', S([['skip', 'Leave them alone'], ['keep', 'Convert and keep HDR (10-bit)'], ['ignore', 'Convert like any other video']], 'skip'), h.HdrMode || 'skip',
+                    sel('hb.HdrMode', 'HDR videos', S([['skip', 'Leave them alone'], ['keep', 'Convert and keep HDR (10-bit)'], ['ignore', 'Convert like any other video']], 'skip', 'hb.HdrMode'), h.HdrMode || 'skip',
                         'HDR and Dolby Vision videos look washed out if re-encoded the usual way. Leave them alone skips those files. Convert and keep HDR re-encodes in 10-bit, keeps the HDR information and checks it survived (Dolby Vision is always left alone). The last option converts them regardless.') +
+                    sel('hb.BitDepth', '10-bit videos', S([['source', 'Keep 10-bit (smoother skies and dark scenes)'], ['8bit', 'Convert to 8-bit (plays on older devices)']], 'source', 'hb.BitDepth'), h.BitDepth || 'source',
+                        '10-bit video (common in anime and newer releases) shows smooth colour gradients; 8-bit can show banding in skies and shadows but plays on older TVs and phones that can\'t decode 10-bit. Keeping 10-bit works with H.265 and AV1 encoders; H.264 output is always 8-bit. HDR that is kept stays 10-bit either way, because HDR needs it.') +
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">Audio</h2>' + desc('What happens to the sound tracks.') +
-                    sel('hb.AudioMode', 'Audio', S([['copy', 'Same as source (copy all tracks, keeps surround)'], ['aac_71', 'AAC, 7.1 surround kept (up to 8 channels)'], ['aac_51', 'AAC, 5.1 surround kept (up to 6 channels)'], ['ac3_51', 'AC3, 5.1 surround kept (up to 6 channels)'], ['aac', 'AAC, stereo only (2 channels)'], ['ac3', 'AC3, stereo only (2 channels)']], 'copy', 'hb.AudioMode'), h.AudioMode || 'copy', 'Same as source keeps every audio track untouched, including Dolby Atmos, TrueHD and DTS-HD (re-encoding cannot keep Atmos, so choose this to keep it). The 7.1 and 5.1 options keep surround tracks at that many channels and never add channels to a smaller track (AC3 cannot do 7.1, so 7.1 is AAC only). The stereo-only options mix every track down to 2 channels, which is smaller but loses surround.') +
+                    sel('hb.AudioMode', 'Audio', S([['copy', 'Same as source (copy all tracks, keeps surround)'], ['aac_71', 'AAC, 7.1 surround kept (up to 8 channels)'], ['aac_51', 'AAC, 5.1 surround kept (up to 6 channels)'], ['ac3_51', 'AC3, 5.1 surround kept (up to 6 channels)'], ['aac', 'AAC, stereo only (2 channels)'], ['ac3', 'AC3, stereo only (2 channels)']], 'copy', 'hb.AudioMode'), h.AudioMode || 'copy', 'Same as source keeps every audio track untouched, including TrueHD and DTS-HD. Dolby Atmos and DTS:X tracks are always copied whatever you pick here, because re-encoding would flatten them. The 7.1 and 5.1 options keep surround tracks at that many channels and never add channels to a smaller track (AC3 cannot do 7.1, so 7.1 is AAC only). The stereo-only options mix every track down to 2 channels, which is smaller but loses surround.') +
                     txt('hb.AudioLanguages', 'Audio languages to keep (3-letter codes, e.g. eng or eng, jpn; empty = keep every track)', h.AudioLanguages || '', 'Removes the other audio tracks (extra languages, commentary), which saves space. Tracks with no language tag are always kept, and if no track matches nothing is removed. Changing this re-converts files that were done before.') +
                     num('hb.AudioBitrate', 'Bitrate (kbps), stereo conversion only', h.AudioBitrate == null ? 160 : h.AudioBitrate, 32, 'Used by the stereo-only options; 128–192 is typical. The surround options use their own fixed bitrate (AAC 7.1 640, AAC 5.1 384, AC3 5.1 448). Ignored when the audio is copied.') +
                 '</div>' +
-                '<div class="verticalSection"><h2 class="sectionTitle">Subtitles</h2>' + desc('What happens to the subtitle tracks.') +
-                    sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Same as source (keep all tracks)'], ['none', 'Remove all subtitles'], ['burn', 'Burn one track into the video']], 'keep'), h.SubtitleMode || 'keep',
-                        'Keeping leaves them as separate tracks you can switch on and off. Burning makes the text part of the picture (it can\'t be turned off), removes the other tracks and is for always-on subtitles.') +
+                '<div class="verticalSection"><h2 class="sectionTitle">Subtitles</h2>' + desc('Three choices: keep, burn in or remove; which languages; and how they look.') +
+                    sel('hb.SubtitleMode', 'Subtitles', S([['keep', 'Keep them (switch on and off while watching)'], ['burn', 'Burn one into the picture (always on)'], ['none', 'Remove them']], 'keep', 'hb.SubtitleMode'), h.SubtitleMode || 'keep',
+                        'Keeping is right for almost everyone; burning in makes the text part of the picture so it can never be turned off.') +
                     '<div class="hbSubKeep hbSub" style="display:' + (h.SubtitleMode === 'burn' || h.SubtitleMode === 'none' ? 'none' : 'block') + ';">' +
-                        txt('hb.SubtitleLanguages', 'Languages to keep (3-letter codes, e.g. eng or eng, spa; empty = all)', h.SubtitleLanguages == null ? 'eng' : h.SubtitleLanguages, 'Tracks in other languages are dropped, so a file with 30 subtitle tracks ends up with just the ones you can read. If a file has none in these languages, nothing is dropped.') +
-                        chk('hb.SubtitleKeepForced', 'Also keep forced tracks (subtitles for foreign-language scenes)', h.SubtitleKeepForced !== false, 'Forced tracks are the short subtitles that appear only when characters speak another language (for example Spanish lines in an English show). They are kept even if their language is not in the list above.') +
-                        sel('hb.SubtitleFormat', 'Text subtitle format', [['srt', 'SRT: plays on Roku and nearly everything without re-encoding the video'], ['asis', 'Leave as they are (ASS, MOV_TEXT…)']], h.SubtitleFormat || 'srt',
-                            'ASS and MOV_TEXT subtitles often make a player (Roku in particular) ask Jellyfin to burn them into a re-encoded video, which looks bad. SRT avoids that. Picture subtitles (PGS, VobSub) cannot be converted and are kept as they are in MKV (MP4 cannot hold them). SRT conversion needs MKV; in MP4 the format MP4 uses (MOV_TEXT) is the only text format.') +
-                        sel('hb.SubtitleExternal', 'Separate subtitle files', [['off', 'No: keep subtitles inside the video file'], ['also', 'Also write each text track as a separate .srt file'], ['only', 'Write separate .srt files and remove them from the video file']], h.SubtitleExternal || 'off',
-                            'Separate files (for example Name.eng.srt and Name.spa.forced.srt) sit next to the video and are the most reliable option for players such as Roku. Picture subtitles (PGS, VobSub) cannot be written as text and always stay inside the file. An existing subtitle file with the same name is never overwritten.') +
+                        txt('hb.SubtitleLanguages', 'Languages to keep (e.g. eng, or eng, spa; empty = all)', h.SubtitleLanguages == null ? 'eng' : h.SubtitleLanguages,
+                            'Other languages are dropped; forced subtitles (the short ones for foreign-language lines) are always kept too.') +
+                        sel('hb.SubtitleStyled', 'Look', S([['keep', 'Original look'], ['keep_srt', 'Original look, plus a simple text copy'], ['srt', 'Simple text only']], 'keep', 'hb.SubtitleStyled'), h.SubtitleStyled || 'keep',
+                            'Original look keeps fancy anime-style subtitles exactly as made, while plain subtitles follow your Jellyfin subtitle settings (Settings > Subtitles); the simple text copy adds a version of the fancy ones that follows those settings too; Simple text only makes every subtitle follow them.') +
                     '</div>' +
                     '<div class="hbBurn hbSub" style="display:' + (burn ? 'block' : 'none') + ';">' +
-                        '<div class="hbBurnLang" style="display:' + (h.BurnTrack > 0 ? 'none' : 'block') + ';">' + txt('hb.BurnLanguage', 'Language to burn in (3-letter code, e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'Burns in the first subtitle track in this language, for example eng for English or jpn for Japanese.') + '</div>' +
-                        togNum('Pick an exact subtitle track number instead of a language', 'Chooses one specific subtitle track by its number in the file. Off = use the language above.', 1, h.BurnTrack > 0, num('hb.BurnTrack', 'Subtitle track number', h.BurnTrack || 0, 0), '.hbBurnLang') +
-                        chk('hb.BurnForcedOnly', 'Forced subtitles only (signs and foreign-language parts)', h.BurnForcedOnly, 'Burns in only the subtitles marked as forced, which are usually signs or short foreign-language lines.') +
+                        txt('hb.BurnLanguage', 'Language to burn in (e.g. eng, jpn)', h.BurnLanguage == null ? 'eng' : h.BurnLanguage, 'The first subtitle track in this language is drawn into the picture.') +
+                        chk('hb.BurnForcedOnly', 'Forced subtitles only', h.BurnForcedOnly, 'Burns in only the short subtitles for signs and foreign-language lines, not every line.') +
                     '</div>' +
                 '</div>' +
                 '<div class="verticalSection"><h2 class="sectionTitle">File</h2>' + desc('Which file format to use and what happens to the original file.') +
                     sel('hb.Deinterlace', 'Interlaced video', S([['auto', 'Clean up only videos that are interlaced'], ['always', 'Always clean up'], ['off', 'Never']], 'auto', 'hb.Deinterlace'), h.Deinterlace || 'auto', 'DVDs and TV recordings are often interlaced, which shows as jagged "combing" on moving edges and becomes permanent once converted. Auto looks at each file and, when it is interlaced, removes combing only from the frames that show it. Progressive video is never touched.') +
-                    sel('hb.Container', 'Container', S([['source', 'Same as source'], ['mkv', 'MKV'], ['mp4', 'MP4']], 'source'), h.Container || 'source',
+                    sel('hb.Container', 'Container', S([['source', 'Same as source'], ['mkv', 'MKV'], ['mp4', 'MP4']], 'source', 'hb.Container'), h.Container || 'source',
                         '"Same as source" keeps MKV as MKV and MP4 as MP4. Other formats (AVI, TS…) become MKV. When an original is replaced, its file name and container normally stay the same, so Jellyfin keeps your watch history (see the option below to change that).') +
                     sel('p.DeleteOriginal', 'Original file', S([['keep', 'Keep it, and save the converted file next to it'], ['replace', 'Replace it with the converted file']], 'replace'), p.DeleteOriginal ? 'replace' : 'keep',
-                        'Replaced originals are held for a while so you can undo. See the Original files tab for the safety checks and hold time.') +
+                        'Replaced originals are held for a while so you can undo. See Settings &gt; Original files for the safety checks and hold time.') +
                     '<div class="hbExt hbSub" style="display:' + (p.DeleteOriginal ? 'block' : 'none') + ';">' +
                         chk('p.ChangeExtension', 'Also change the file extension to the container chosen above', p.ChangeExtension,
                             'Jellyfin identifies a video by its file path, so a changed extension (for example .mkv to .mp4) makes it a brand-new item in the library. Files next to it with the same name (.nfo, images, subtitles) are kept. Only applies when Container is MKV or MP4 and the file is not already that type.') +
@@ -540,9 +665,6 @@
                         txt('p.OutputSuffix', 'Label added to the converted file\'s name', p.OutputSuffix == null ? '- HandBrake' : p.OutputSuffix, 'Example: "Movie.mkv" becomes "Movie - HandBrake.mkv". Jellyfin shows the two as versions of the same movie or episode.') +
                     '</div>' +
                 '</div>' +
-                '<details style="margin:.8em 0;"><summary>Advanced</summary>' +
-                    txt('hb.ExtraArgs', 'Extra HandBrakeCLI options', h.ExtraArgs, 'For experts: options typed here are added to the end of the HandBrakeCLI command, e.g. <code>--crop-mode none</code>. Leave blank if unsure.') +
-                '</details>' +
             '</div>';
         }
 
@@ -564,8 +686,72 @@
             return p;
         }
 
+        // ---------------------------------------------------------------- settings check
+        // Settings depend on each other (an MP4 container changes where subtitles go, an H.264 encoder can't keep HDR or 10-bit...).
+        // Nothing is ever changed for you: a combination that won't do what it says is marked in bold red on the option, and listed
+        // above the Save (or Add to queue) button; combinations that work but behave differently than you might expect are listed there too.
+        var TEN_BIT = ['x265', 'svt_av1', 'nvenc_h265', 'nvenc_av1', 'qsv_h265', 'qsv_av1'];
+        function profileIssues(root) {
+            var h = readProfile(root).HandBrake || {}, out = [];
+            function field(k) { return root.querySelector('[data-k="' + k + '"]'); }
+            function bad(k, msg) { out.push({ el: field(k), msg: msg, bad: true }); }
+            function info(msg) { out.push({ msg: msg, bad: false }); }
+            var enc = String(h.Encoder || 'x265'), encSel = field('hb.Encoder');
+            var encText = encSel && encSel.selectedOptions && encSel.selectedOptions[0] ? encSel.selectedOptions[0].textContent : '';
+            var tenBit = /_(10|12)bit$/.test(enc) || TEN_BIT.indexOf(enc) >= 0;
+            if (encText.indexOf(' - not supported') >= 0) bad('hb.Encoder', 'This encoder failed the encoder test on this server, so every conversion with it would fail.');
+            var q = Number(h.Quality), max = /av1/.test(enc) ? 63 : 51;
+            if (!(q >= 0 && q <= max)) bad('hb.Quality', 'Quality must be between 0 and ' + max + ' for this encoder.');
+            if (h.HdrMode === 'keep' && !tenBit) bad('hb.HdrMode', 'Keeping HDR needs an H.265 or AV1 encoder: with ' + enc + ' every HDR video is skipped.');
+            if (h.BitDepth !== '8bit' && !tenBit && /264/.test(enc)) bad('hb.BitDepth', 'H.264 can\'t stay 10-bit: 10-bit videos will become 8-bit. Pick an H.265 or AV1 encoder, or choose Convert to 8-bit.');
+            if (h.HdrMode === 'keep' && h.BitDepth === '8bit') info('HDR needs 10-bit, so HDR videos stay 10-bit; only the other 10-bit videos become 8-bit.');
+            if (h.SubtitleMode === 'burn' && !String(h.BurnLanguage || '').trim()) bad('hb.BurnLanguage', 'Pick the language to burn in (for example eng), or nothing will be burned in.');
+            if (h.Container === 'mp4' && (h.SubtitleMode || 'keep') === 'keep') info('MP4 can\'t hold styled or SRT subtitles, so they are saved as files next to the video (.ass, .srt) instead of inside it.');
+            if (h.Container === 'mp4' && (h.AudioMode || 'copy') === 'copy') info('MP4 can\'t hold TrueHD, DTS or FLAC audio, so those tracks become AAC with the same channels.');
+            return out;
+        }
+        function validateSettings() {
+            $$('.hbBad').forEach(function (e) { e.classList.remove('hbBad'); });
+            $$('.hbBadMsg').forEach(function (e) { e.remove(); });
+            var saveList = [], convList = [];
+            function mark(el, msg) {
+                if (!el) return;
+                var box = el.closest('.selectContainer, .inputContainer, .checkboxContainer') || el.parentElement;
+                box.classList.add('hbBad');
+                var m = document.createElement('div'); m.className = 'hbBadMsg'; m.textContent = msg; box.appendChild(m);
+            }
+            function collect(root, where, list) {
+                if (!root || !root.querySelector('[data-k]')) return;
+                profileIssues(root).forEach(function (i) { if (i.bad) mark(i.el, i.msg); list.push({ bad: i.bad, msg: where + ': ' + i.msg }); });
+            }
+            collect($('#hbDefaults'), 'Conversion settings', saveList);
+            $$('.hbLib').forEach(function (lib) {
+                var pr = $('.hbLibProfile', lib);
+                if (pr && pr.style.display !== 'none') collect(pr, 'Library "' + lib.getAttribute('data-name') + '"', saveList);
+            });
+            collect($('#hbConvProfile'), 'These options', convList);
+            if ($('#ScheduleEnabled') && $('#ScheduleEnabled').checked) {
+                var wins = readWindows(), msg = !wins.length ? 'No time window is set, so nothing will ever convert.'
+                    : wins.some(function (x) { return !x.Days.length; }) ? 'A time window has no days ticked, so it never applies.' : '';
+                if (msg) { mark($('#ScheduleEnabled'), msg); saveList.push({ bad: true, msg: 'Schedule: ' + msg }); }
+            }
+            function note(host, list, what) {
+                if (!host) return;
+                var bad = list.filter(function (x) { return x.bad; }), inf = list.filter(function (x) { return !x.bad; });
+                host.innerHTML = (bad.length ? '<div class="hbNoteBad">' + bad.length + ' setting(s) won\'t work as set' + what + ':</div>' + bad.map(function (x) { return '<div class="hbNoteBad">• ' + esc(x.msg) + '</div>'; }).join('') : '') +
+                    inf.map(function (x) { return '<div class="hbNoteInfo fieldDescription">ℹ ' + esc(x.msg) + '</div>'; }).join('');
+            }
+            note($('#hbSaveNote'), saveList, ' (you can still save)');
+            note($('#hbConvNote'), convList, '');
+        }
+        var validateTimer = null;
+        function validateSoon() { clearTimeout(validateTimer); validateTimer = setTimeout(validateSettings, 150); }
+        page.addEventListener('input', validateSoon);
+        page.addEventListener('click', validateSoon);
+
         page.addEventListener('change', function (e) {
             var t = e.target;
+            validateSoon();
             setTimeout(refreshLibSummaries, 0);
             if (t && t.getAttribute && t.getAttribute('data-k') === 'p.DeleteOriginal') {
                 var pr = t.closest('.hbProfile');
@@ -595,7 +781,7 @@
                 var card = t.closest('.hbLib');
                 var holder = card.querySelector('.hbLibProfile');
                 if (t.checked && card.getAttribute('data-seeded') !== '1') {
-                    holder.innerHTML = profileHtml(readProfile($('#hbDefaults'))); // start from the Default settings
+                    holder.innerHTML = profileHtml(readProfile($('#hbDefaults'))); // start from Conversion settings
                     card.setAttribute('data-seeded', '1');
                 }
                 holder.style.display = t.checked ? 'block' : 'none';
@@ -608,15 +794,28 @@
         });
 
         // ---------------------------------------------------------------- tabs
+        // Five tabs; the old section names still work and open the tab and the fold that holds them.
+        var SUB_TAB = { overview: 'status', queue: 'status', history: 'status', defaults: 'settings', originals: 'settings', schedule: 'settings' };
+        function subOpen(sub) { var d = $('details[data-sub="' + sub + '"]'); return !!(d && d.open); }
+        function refreshSub(sub) {
+            if (sub === 'queue') refreshQueue();
+            if (sub === 'history') refreshHistory();
+            if (sub === 'originals') refreshTrash();
+        }
         function showTab(name) {
+            var sub = SUB_TAB[name] ? name : null;
+            name = SUB_TAB[name] || name;
             activeTab = name;
             $$('.hbTabBtn').forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-tab') === name); });
             $$('.hbTab').forEach(function (t) { t.style.display = t.getAttribute('data-tab') === name ? 'block' : 'none'; });
-            $('#hbSaveBar').style.display = (name === 'convert' || name === 'queue' || name === 'history' || name === 'encoders') ? 'none' : 'block';
-            if (name === 'queue') refreshQueue();
-            if (name === 'history') refreshHistory();
-            if (name === 'originals') refreshTrash();
+            $('#hbSaveBar').style.display = name === 'convert' ? 'none' : 'block';
+            if (sub && sub !== 'overview') { var d = $('details[data-sub="' + sub + '"]'); if (d) d.open = true; }
+            ['queue', 'history', 'originals'].forEach(function (x) { if (subOpen(x) && $('details[data-sub="' + x + '"]').closest('.hbTab').getAttribute('data-tab') === name) refreshSub(x); });
         }
+        page.addEventListener('toggle', function (e) {
+            var d = e.target;
+            if (d && d.open && d.getAttribute && d.getAttribute('data-sub')) refreshSub(d.getAttribute('data-sub'));
+        }, true);
         $('#hbTabs').addEventListener('click', function (e) {
             var b = e.target.closest('.hbTabBtn');
             if (b) showTab(b.getAttribute('data-tab'));
@@ -678,7 +877,7 @@
                     '<h2 class="sectionTitle" style="margin-top:0">' + esc(f.Name) + ' <small class="fieldDescription">(' + esc(f.CollectionType || 'mixed') + ')</small></h2>' +
                     '<div class="fieldDescription hbLibNow"></div>' +
                     '<div class="checkboxContainer checkboxContainer-withDescription">' + box('hbAuto', '', s.AutoProcess, 'Auto-convert this library') + '<div class="fieldDescription checkboxFieldDescription">Converts everything in it in the background, now and as new files arrive.</div></div>' +
-                    '<div class="checkboxContainer checkboxContainer-withDescription">' + box('hbCustom', '', s.UseCustom, 'Use settings specific to this library') + '<div class="fieldDescription checkboxFieldDescription">Off = uses the Default settings tab. On = starts from a copy of the Default settings, which you can then change for this library.</div></div>' +
+                    '<div class="checkboxContainer checkboxContainer-withDescription">' + box('hbCustom', '', s.UseCustom, 'Use settings specific to this library') + '<div class="fieldDescription checkboxFieldDescription">Off = uses the Conversion settings tab. On = starts from a copy of Conversion settings, which you can then change for this library.</div></div>' +
                     '<div class="hbLibProfile" style="display:' + (s.UseCustom ? 'block' : 'none') + '">' + profileHtml(s.Profile) + '</div></div>';
             }).join('');
         }
@@ -693,7 +892,7 @@
                 };
             });
         }
-        // One plain sentence per library card: what this library will actually do right now (its own settings, or the Default settings).
+        // One plain sentence per library card: what this library will actually do right now (its own settings, or Conversion settings).
         function profileSummary(p) {
             var h = p.HandBrake || {};
             return [ENC_LABELS[h.Encoder] || h.Encoder || 'x265', h.MaxHeight ? h.MaxHeight + 'p max' : 'source resolution',
@@ -702,7 +901,7 @@
         function refreshLibSummaries() {
             $$('.hbLib').forEach(function (card) {
                 var own = $('.hbCustom', card).checked, p = readProfile(own ? $('.hbLibProfile', card) : $('#hbDefaults'));
-                $('.hbLibNow', card).innerHTML = 'Right now (' + (own ? "this library's own settings" : 'Default settings') + '): ' + profileSummary(p);
+                $('.hbLibNow', card).innerHTML = 'Right now (' + (own ? "this library's own settings" : 'Conversion settings') + '): ' + profileSummary(p);
             });
         }
         function effectiveProfileFor(libId) {
@@ -723,6 +922,126 @@
             var b = e.target.closest('.hbExcDel'); if (!b) return;
             api('POST', 'Excluded/Toggle?id=' + b.getAttribute('data-id')).then(function () { loadExcluded(); if (conv.libId) browse(); });
         });
+        // ---------------------------------------------------------------- Tools > Update suggestions
+        var SUG_NAMES = { 'hb.Encoder': 'Video encoder', 'hb.MaxHeight': 'Resolution', 'hb.H264Level': 'H.264 compatibility level', 'hb.HdrMode': 'HDR videos', 'hb.BitDepth': '10-bit videos',
+            'hb.Deinterlace': 'Interlaced video', 'hb.AudioMode': 'Audio', 'hb.SubtitleMode': 'Subtitles', 'hb.SubtitleStyled': 'Subtitle look', 'hb.Container': 'Container' };
+        var sugTimer = null;
+        function renderSugCheck(c) {
+            var bar = $('#hbSugBar');
+            bar.style.display = c.Total > 0 || c.Running ? 'block' : 'none';
+            bar.max = Math.max(1, c.Total); bar.value = c.Checked;
+            $('#hbSugMsg').textContent = c.Running ? (c.Total ? 'Reading log ' + c.Checked + ' of ' + c.Total + '…' : c.Message) : c.Message;
+            $('#hbSugLogs').innerHTML = (c.Logs || []).slice().reverse().map(function (l) {
+                return '<div class="hbFmt">' + (l.Counted ? '✓ ' : '– ') + esc(l.Video) + ' · ' + esc(fmtDate(l.Time)) + ' · ' + esc(l.Result) + '</div>';
+            }).join('');
+            $('#hbSugGo').disabled = !!c.Running;
+            if (c.Running) {
+                if (!sugTimer) sugTimer = setTimeout(function () { sugTimer = null; api('GET', 'SuggestionCheck').then(renderSugCheck); }, 700);
+                return;
+            }
+            if (!c.Total && !(c.Logs || []).length) { $('#hbSugResult').innerHTML = ''; return; }
+            $('#hbSugResult').innerHTML = '<h3 class="sectionTitle">Suggestions now</h3>' + ((c.Suggestions || []).length
+                ? c.Suggestions.map(function (x) { return '<div class="hbFmt"><b>' + esc(SUG_NAMES[x.Key] || x.Key) + '</b>: ' + esc(x.Reason) + '</div>'; }).join('')
+                : '<div class="fieldDescription">None: the dropdowns mark the usual defaults.</div>');
+            loadInsights().then(refreshMarks); // the marks in Conversion settings and the libraries follow straight away
+        }
+        $('#hbSugGo').addEventListener('click', function () {
+            $('#hbSugMsg').textContent = 'Starting…';
+            api('POST', 'SuggestionCheck?limit=' + Math.max(1, parseInt($('#hbSugLimit').value, 10) || 100)).then(renderSugCheck,
+                function (x) { errText(x, 'Could not start the check.').then(function (t) { $('#hbSugMsg').textContent = t; }); });
+        });
+
+        // ---------------------------------------------------------------- Tools > Repair giant subtitles
+        var giantTimer = null;
+        function renderGiant(g) {
+            var n = (g.Found || []).length;
+            $('#hbGiantMsg').textContent = g.Running ? (g.Message + ' ' + g.Checked + ' of ' + g.Total + ' checked, ' + n + ' found so far.') : g.Message;
+            $('#hbGiantList').innerHTML = (g.Found || []).map(function (f) { return '<div class="hbFmt">' + esc(baseName(f.Path)) + ' · ' + esc(f.Why) + '</div>'; }).join('');
+            $('#hbGiantFix').style.display = !g.Running && n > 0 ? 'inline-block' : 'none';
+            $('#hbGiantScan').disabled = !!g.Running;
+            if (g.Running && !giantTimer) giantTimer = setTimeout(function () { giantTimer = null; api('GET', 'GiantSubtitles').then(renderGiant); }, 2000);
+        }
+        $('#hbGiantScan').addEventListener('click', function () {
+            $('#hbGiantMsg').textContent = 'Starting…';
+            api('POST', 'GiantSubtitles/Scan').then(renderGiant, function (x) { errText(x, 'Could not start the scan.').then(function (t) { $('#hbGiantMsg').textContent = t; }); });
+        });
+        $('#hbGiantFix').addEventListener('click', function () {
+            api('POST', 'GiantSubtitles/Fix').then(function (r) {
+                $('#hbGiantMsg').textContent = r.Added + ' repair(s) added to the Queue. Each takes about a minute; they run straight away, without waiting for the schedule.';
+                $('#hbGiantFix').style.display = 'none';
+            }, function (x) { errText(x, 'Could not queue the repairs.').then(function (t) { $('#hbGiantMsg').textContent = t; }); });
+        });
+
+        // ---------------------------------------------------------------- Tools > Subtitle check
+        var subNav = { lib: '', stack: [] };
+        function fillSubLibs() {
+            $('#hbSubLib').innerHTML = '<option value="">— Pick library —</option>' + visibleFolders().map(function (f) { return '<option value="' + esc(f.ItemId) + '">' + esc(f.Name) + '</option>'; }).join('');
+        }
+        function subBrowse() {
+            var lib = $('#hbSubLib').value, list = $('#hbSubList');
+            if (lib !== subNav.lib) { subNav.lib = lib; subNav.stack = []; }
+            if (!lib) { list.innerHTML = ''; $('#hbSubCrumbs').innerHTML = ''; return; }
+            var parts = ['<a href="#" class="hbSubCrumb" data-i="-1">' + esc(($('#hbSubLib').selectedOptions[0] || {}).text || 'Library') + '</a>'];
+            subNav.stack.forEach(function (s, i) { parts.push('<a href="#" class="hbSubCrumb" data-i="' + i + '">' + esc(s.name) + '</a>'); });
+            $('#hbSubCrumbs').innerHTML = parts.join(' &rsaquo; ');
+            var q = subNav.stack.length ? 'parentId=' + subNav.stack[subNav.stack.length - 1].id : 'libraryId=' + lib + '&search=' + encodeURIComponent($('#hbSubSearch').value || '');
+            list.textContent = 'Loading…';
+            api('GET', 'Browse?' + q).then(function (items) {
+                if (!items.length) { list.innerHTML = '<div class="fieldDescription">Nothing found.</div>'; return; }
+                list.innerHTML = items.map(function (i) {
+                    var label = (i.Kind === 'Episode' && i.Index != null ? i.Index + '. ' : '') + i.Name + (i.Year ? ' (' + i.Year + ')' : '');
+                    var drill = i.Kind === 'Series' || i.Kind === 'Season';
+                    return '<div class="hbRow"><span class="grow">' + esc(label) + '</span><span class="hbBadge">' + esc(i.Kind) + '</span>' +
+                        (drill ? '<button type="button" class="raised hbSmall hbSubOpen" data-id="' + esc(i.Id) + '" data-name="' + esc(i.Name) + '">Open</button>'
+                               : '<button type="button" class="raised hbSmall hbSubCheck" data-id="' + esc(i.Id) + '" data-name="' + esc(label) + '">Check</button>') + '</div>';
+                }).join('');
+            }, function () { list.textContent = 'Could not load items.'; });
+        }
+        function renderSubReport(r) {
+            var box = $('#hbSubResult'); box.style.display = 'block';
+            var h = '<h3 class="sectionTitle">' + esc(r.File) + '</h3>';
+            if (r.Note) h += '<div class="fieldDescription">' + esc(r.Note) + '</div>';
+            if (r.Video) h += '<h3 class="sectionTitle">Video</h3><div class="hbFmt">Now: ' + esc(r.Video) + '</div><div class="hbFmt">After: ' + esc(r.VideoAfter) + '</div>';
+            if (r.Audio && r.Audio.length) h += '<h3 class="sectionTitle">Audio</h3>' + r.Audio.map(function (a) { return '<div class="hbFmt">' + esc(a) + '</div>'; }).join('');
+            h += '<h3 class="sectionTitle">Subtitles</h3>';
+            if (r.Summary) h += '<div class="fieldDescription">With these settings (as ' + esc(r.Container) + '): ' + esc(r.Summary) + '.</div>';
+            h += (r.Tracks || []).map(function (t) {
+                var head = '<b>Track ' + t.Number + '</b> · ' + esc(t.Kind) + ' (' + esc(t.Codec.toUpperCase()) + ') · ' + esc(t.Language) + (t.Title ? ' · ' + esc(t.Title) : '') + (t.Forced ? ' · forced' : '');
+                var look = '';
+                if (t.Styled) {
+                    var st = t.Styled;
+                    look = '<div class="fieldDescription">Canvas ' + (st.PlayResX && st.PlayResY ? st.PlayResX + '×' + st.PlayResY : 'not set (players assume 384×288)') + ' · ' + st.Styles.length + ' style(s): ' +
+                        st.Styles.map(function (s) { return esc(s.Name) + ' (' + esc(s.Font || '?') + ', size ' + s.Size + ')'; }).join(', ') + '</div>' +
+                        (st.Fonts && st.Fonts.length ? '<div class="fieldDescription">Fonts used: ' + st.Fonts.map(esc).join(', ') + (t.MissingFonts && t.MissingFonts.length ? ' · <b>not found inside the file: ' + t.MissingFonts.map(esc).join(', ') + '</b> (players substitute a similar font)' : ' · all inside the file') + '</div>' : '');
+                }
+                return '<div class="hbFmt" style="margin:.6em 0">' + head + look +
+                    '<div class="fieldDescription">Settings do: ' + esc(t.Outcome) + '</div>' +
+                    '<div class="fieldDescription">Look afterwards: ' + esc(t.Look) + '</div></div>';
+            }).join('');
+            if (r.Attachments && r.Attachments.length) h += '<div class="fieldDescription">Files attached inside the video (fonts): ' + r.Attachments.map(esc).join(', ') + '</div>';
+            h += '<h3 class="sectionTitle">How it played</h3>' + ((r.Plays || []).length ? r.Plays.map(function (p) {
+                return '<div class="hbFmt">' + esc(fmtDate(p.Time)) + (p.Client ? ' · ' + esc(p.Client) : '') + ' · ' + esc(p.How) + (p.Why ? ' (' + esc(p.Why) + ')' : '') + '</div>';
+            }).join('') : '<div class="fieldDescription">No playback recorded for this title yet.</div>');
+            box.innerHTML = h;
+        }
+        $('#hbSubLib').addEventListener('change', function () { subNav.stack = []; subBrowse(); });
+        $('#hbSubGo').addEventListener('click', function () { subNav.stack = []; subBrowse(); });
+        $('#hbSubCrumbs').addEventListener('click', function (e) {
+            var c = e.target.closest('.hbSubCrumb'); if (!c) return;
+            e.preventDefault();
+            subNav.stack = subNav.stack.slice(0, parseInt(c.getAttribute('data-i'), 10) + 1);
+            subBrowse();
+        });
+        $('#hbSubList').addEventListener('click', function (e) {
+            var o = e.target.closest('.hbSubOpen'), c = e.target.closest('.hbSubCheck');
+            if (o) { subNav.stack.push({ id: o.getAttribute('data-id'), name: o.getAttribute('data-name') }); subBrowse(); }
+            if (c) {
+                var box = $('#hbSubResult'); box.style.display = 'block'; box.textContent = 'Reading ' + c.getAttribute('data-name') + '…';
+                api('POST', 'CheckTitle', { ItemId: c.getAttribute('data-id'), Profile: effectiveProfileFor(subNav.lib) }).then(renderSubReport,
+                    function (x) { errText(x, 'Could not check that title.').then(function (t) { box.textContent = t; }); });
+            }
+        });
+
         function fillConvLibs() {
             var el = $('#hbConvLib');
             el.innerHTML = '<option value="">— Pick library —</option>' + visibleFolders().map(function (f) { return '<option value="' + esc(f.ItemId) + '">' + esc(f.Name) + '</option>'; }).join('');
@@ -763,6 +1082,7 @@
             var names = ids.map(function (id) { return conv.names[id] || id; });
             $('#hbConvWhat').textContent = names.length > 3 ? names.slice(0, 3).join(', ') + ' + ' + (names.length - 3) + ' more' : names.join(', ');
             $('#hbConvProfile').innerHTML = profileHtml(effectiveProfileFor(conv.libId));
+            validateSoon();
             $('#hbRunNow').checked = false; $('#hbForce').checked = false;
             $('#hbQueueMsg').textContent = '';
             $('#hbConvOptions').style.display = 'block';
@@ -800,6 +1120,7 @@
         });
 
         // ---------------------------------------------------------------- queue tab
+        function fmtDate(iso) { var d = new Date(iso); return isNaN(d) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
         function fmtBytes(n) { return n > 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : (n / 1048576).toFixed(0) + ' MB'; }
         var lastStatus = null;
         var picked = {};
@@ -807,7 +1128,7 @@
         function etaToSec(t) { var m = /(\d+)h(\d+)m(\d+)s/.exec(t || ''); return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : null; }
         // "x265 (HEVC) · MKV · 720p max · subtitles kept · replaces the original file"
         function jobFormat(j) {
-            var subs = j.Subtitles === 'none' ? 'subtitles removed' : j.Subtitles === 'burn' ? 'subtitles burned in' : j.SubtitleLanguages ? 'subtitles: ' + j.SubtitleLanguages + (j.SubtitleKeepForced ? ' + forced' : '') : 'all subtitles kept';
+            var subs = j.Subtitles === 'none' ? 'subtitles removed' : j.Subtitles === 'burn' ? 'subtitles burned in' : j.SubtitleLanguages ? 'subtitles: ' + j.SubtitleLanguages + ' + forced' : 'all subtitles kept';
             return [ENC_LABELS[j.Encoder] || j.Encoder, j.Container, j.MaxHeight ? j.MaxHeight + 'p max' : 'same resolution', subs,
                 j.DeleteOriginal ? (j.NewItem ? 'replaces the original with a ' + j.Container + ' file (shows up as a new item in Jellyfin)' : 'replaces the original file') : 'keeps the original and adds a "' + (j.Suffix || '- HandBrake') + '" copy'].join(' · ');
         }
@@ -817,7 +1138,7 @@
             var host = $('#hbQueue');
             var ids = {}; jobs.forEach(function (j) { ids[j.Id] = 1; });
             Object.keys(picked).forEach(function (k) { if (!ids[k]) delete picked[k]; });
-            if (!jobs.length) { host.innerHTML = '<div class="fieldDescription">Nothing in the queue. Add titles from Manual convert; finished ones are listed under History.</div>'; return; }
+            if (!jobs.length) { host.innerHTML = '<div class="fieldDescription">Nothing in the queue. Add titles from Convert titles; finished ones are listed under History.</div>'; return; }
             var queued = jobs.filter(function (j) { return j.Status === 'Queued'; });
             var runningAuto = jobs.filter(function (j) { return j.Kind === 'auto' && j.Running; })[0];
             host.innerHTML = jobs.map(function (j) {
@@ -937,15 +1258,15 @@
         $('#hbHistClear').addEventListener('click', function () { if (confirm('Clear the whole history?')) api('POST', 'History/Clear').then(refreshHistory); });
 
         // ---------------------------------------------------------------- suggestions from Jellyfin's transcode logs
-        var playbackSug = {}; // data-k -> value that Jellyfin's own transcodes point to (empty until there is enough data)
+        var playbackSug = {}, playbackWhy = {}; // data-k -> the value your playback points to, and the evidence (empty until there is some)
         function loadInsights() {
             return api('GET', 'Insights?days=60').then(function (r) {
-                playbackSug = {};
-                (r.Suggestions || []).forEach(function (x) { playbackSug[x.Key] = x.Value; });
-            }, function () { playbackSug = {}; });
+                playbackSug = {}; playbackWhy = {};
+                (r.Suggestions || []).forEach(function (x) { playbackSug[x.Key] = String(x.Value); playbackWhy[x.Key] = x.Reason; });
+            }, function () { playbackSug = {}; playbackWhy = {}; });
         }
 
-                // ---------------------------------------------------------------- video encoders (Encoder test tab)
+        // ---------------------------------------------------------------- video encoders (Tools tab)
         function rowMsg(n) { var r = encoderTests[n]; return r ? (r.Ok ? '✔ ' : '✖ ') + r.Message : ''; }
         function renderEncoders() {
             var host = $('#hbEncoders');
@@ -997,7 +1318,7 @@
                 testOne(names[i++]).then(next);
             })();
         });
-        page.addEventListener('click', function (e) { if (e.target.closest('.hbGoEncTest')) showTab('encoders'); });
+        page.addEventListener('click', function (e) { if (e.target.closest('.hbGoEncTest')) { showTab('tools'); var es = $('#hbEncSection'); if (es) { es.open = true; if (es.scrollIntoView) es.scrollIntoView(); } } });
 
         function refreshTrash() {
             api('GET', 'Trash').then(function (list) {
@@ -1021,7 +1342,7 @@
         function refresh() {
             api('GET', 'Status').then(function (s) {
                 lastStatus = s;
-                var hbLine = s.HandBrakeFound ? ('HandBrake: ' + esc(s.HandBrakeVersion || 'found')) : '<b>HandBrake is not installed</b> (see the HandBrake &amp; tools tab)';
+                var hbLine = s.HandBrakeFound ? ('HandBrake: ' + esc(s.HandBrakeVersion || 'found')) : '<b>HandBrake is not installed</b> (see the Tools tab)';
                 $('#hbHbStatus').innerHTML = s.HandBrakeFound
                     ? '<b>HandBrake is installed</b>: ' + esc(s.HandBrakeVersion || 'version unknown') + '<br><span class="fieldDescription">' + esc(s.HandBrakePath || '') + ' (' + esc(s.HandBrakeSource || '') + ')</span>'
                     : '<b>HandBrake was not found on this server.</b><br>Install it by running this in a terminal on the server, then press Check again:<br><code>sudo apt install handbrake-cli</code>';
@@ -1047,8 +1368,8 @@
                 }
                 $('#hbWaiting').textContent = wt;
                 $('#hbStats').textContent = 'Converted: ' + s.Converted + ' | Space saved: ' + fmtBytes(s.BytesSaved) + ' | Skipped (not smaller): ' + s.Skipped + ' | Failed (auto): ' + s.Failed + ' | Queued: ' + s.Queued + (s.TrashCount ? ' | Originals on hold: ' + s.TrashCount + ' (' + fmtBytes(s.TrashBytes) + ')' : '');
-                if (activeTab === 'queue') refreshQueue();
-                if (activeTab === 'history') refreshHistory();
+                if (activeTab === 'status' && subOpen('queue')) refreshQueue();
+                if (activeTab === 'status' && subOpen('history')) refreshHistory();
             }, function () { $('#hbStatus').textContent = 'Status unavailable.'; });
         }
         $('#hbDryBtn').addEventListener('click', function () {
@@ -1072,17 +1393,17 @@
         $('#hbPendingBtn').addEventListener('click', function () {
             api('GET', 'Pending?limit=100').then(function (list) {
                 var el = $('#hbPending'); el.style.display = 'block';
-                el.textContent = list.length ? list.map(function (x) { return '[' + x.Library + '] ' + x.Path; }).join('\n') : 'Nothing pending. Turn on Auto-process for a library (and save) first.';
+                el.textContent = list.length ? list.map(function (x) { return '[' + x.Library + '] ' + x.Path; }).join('\n') : 'Nothing waiting. Turn on Auto-convert for a library (and press Save) first.';
             });
         });
         $('#hbResetBtn').addEventListener('click', function () {
-            if (!confirm('Forget which files were auto-converted? They could be converted again.')) return;
+            if (!confirm('Forget which files Auto-convert already converted or skipped? They could be converted again.')) return;
             api('POST', 'ResetState').then(refresh);
         });
         $('#hbCheckBtn').addEventListener('click', function () { $('#hbHbStatus').textContent = 'Checking…'; refresh(); loadEncoders().then(renderEncoders); });
 
         // ---------------------------------------------------------------- load / save
-        var BOOLS = ['SkipIfNotSmaller', 'VerifyDuration', 'Enabled', 'ScheduleEnabled', 'PauseWhileStreaming', 'PausedCountsAsStreaming', 'IgnoreAudioPlayback', 'LowPriority'];
+        var BOOLS = ['SkipIfNotSmaller', 'SkipSameFormat', 'VerifyDuration', 'Enabled', 'ScheduleEnabled', 'PauseWhileStreaming', 'PausedCountsAsStreaming', 'IgnoreAudioPlayback', 'LowPriority'];
         function intOf(id, dflt, lo, hi) { var n = parseInt($('#' + id).value, 10); if (isNaN(n)) n = dflt; return Math.min(hi == null ? 1e9 : hi, Math.max(lo == null ? 0 : lo, n)); }
         function load() {
             Dashboard.showLoadingMsg();
@@ -1101,7 +1422,7 @@
                 $('#hbScheduleBody').style.display = cfg.ScheduleEnabled ? 'block' : 'none';
                 $('#MinFreeSpaceGb').value = cfg.MinFreeSpaceGb == null ? 2 : cfg.MinFreeSpaceGb;
                 $('#TrashFolder').value = cfg.TrashFolder || '';
-                syncTogs($('.hbTab[data-tab=originals]'));
+                syncTogs($('details[data-sub=originals]'));
                 $('#hbSavingsWrap').style.display = cfg.SkipIfNotSmaller ? 'block' : 'none';
                 renderEncoders();
                 $('#hbDefaults').innerHTML = profileHtml(cfg.Defaults);
@@ -1109,8 +1430,11 @@
                 loadExcluded();
                 refreshLibSummaries();
                 fillConvLibs();
+                fillSubLibs();
+                api('GET', 'GiantSubtitles').then(function (g) { if (g.Running || (g.Found || []).length) renderGiant(g); }, function () { });
                 renderWindows(cfg.Windows || []);
                 renderBlackouts(cfg.Blackouts || []);
+                validateSoon();
                 Dashboard.hideLoadingMsg();
                 refresh();
             });

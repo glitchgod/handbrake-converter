@@ -13,10 +13,10 @@ cat > dist/meta.json <<JSON
 {
   "category": "General",
   "changelog": "$CHANGELOG",
-  "description": "Re-encodes library videos with HandBrake on a schedule.",
+  "description": "Converts your library in the background with HandBrakeCLI: automatically on a schedule or title by title, keeping the original look.",
   "guid": "6b1f3e52-8c0a-4d57-9a41-2f7d5c8e1b90",
   "name": "$NAME",
-  "overview": "Re-encodes library videos with HandBrake on a schedule.",
+  "overview": "Converts your library in the background with HandBrakeCLI: automatically on a schedule or title by title, keeping the original look.",
   "owner": "HandBrake Converter",
   "targetAbi": "12.1.0.0",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",

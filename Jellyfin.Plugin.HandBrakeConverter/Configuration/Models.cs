@@ -52,8 +52,18 @@ public class HandBrakeSettings
     /// <summary>Keep tracks marked as forced (translations of foreign-language lines) even when their language is not listed.</summary>
     public bool SubtitleKeepForced { get; set; } = true;
 
-    /// <summary>srt = turn text subtitles (ASS, MOV_TEXT...) into SRT, which Roku and nearly every player show without re-encoding the video | asis = leave them as they are.</summary>
+    /// <summary>
+    /// Plain text subtitles (MOV_TEXT, WebVTT...). srt = turn them into SRT, which nearly every player shows without re-encoding the video
+    /// (MP4: written as separate .srt files) | asis = leave them as they are. Styled subtitles (ASS/SSA) follow <see cref="SubtitleStyled"/>.
+    /// </summary>
     public string SubtitleFormat { get; set; } = "srt";
+
+    /// <summary>
+    /// Styled subtitles (ASS/SSA: their own fonts, sizes, colours and positions, common in anime). keep = exactly as they are, with their
+    /// fonts (MKV; MP4 can't hold them, so there they become a separate .ass file) | keep_srt = the same, plus a plain .srt file next to
+    /// the video for players that can't draw styled subtitles | srt = plain SRT (the styling is lost).
+    /// </summary>
+    public string SubtitleStyled { get; set; } = "keep";
 
     /// <summary>
     /// Audio languages to keep, comma separated (eng, jpn). Empty = keep every audio track. Tracks with no language tag are always kept,
@@ -67,7 +77,6 @@ public class HandBrakeSettings
     /// <summary>
     /// Subtitle mode "keep" only. off = subtitles stay inside the video file | also = text tracks are ALSO written as separate .srt files next to
     /// the video | only = text tracks are written as separate .srt files and removed from inside the file (picture subtitles stay inside).
-    /// Separate files are the most reliable thing for players such as Roku.
     /// </summary>
     public string SubtitleExternal { get; set; } = "off";
 
@@ -90,14 +99,17 @@ public class HandBrakeSettings
     public string HdrMode { get; set; } = "skip";
 
     /// <summary>
+    /// 10-bit sources: source = stay 10-bit when the encoder has a 10-bit version (H.265, AV1; smoother gradients) | 8bit = convert to
+    /// 8-bit (plays on older devices). HDR kept with "Convert and keep HDR" is always 10-bit, because HDR needs it.
+    /// </summary>
+    public string BitDepth { get; set; } = "source";
+
+    /// <summary>
     /// x264 only: the highest H.264 level to use. "4.1" (default) plays directly on almost every TV, phone and browser. "auto" lets x264 pick,
     /// and options such as ref=5 then push 1080p to level 5.0, which many devices cannot play directly (Jellyfin then re-encodes it live).
     /// Not applied above 1080p, where level 4.1 is too low.
     /// </summary>
     public string H264Level { get; set; } = "4.1";
-
-    /// <summary>Raw extra arguments appended last.</summary>
-    public string ExtraArgs { get; set; } = string.Empty;
 
     public HandBrakeSettings Clone() => (HandBrakeSettings)MemberwiseClone();
 }

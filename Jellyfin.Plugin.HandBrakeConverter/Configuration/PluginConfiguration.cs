@@ -70,6 +70,9 @@ public class PluginConfiguration : BasePluginConfiguration
     /// <summary>Discard the result (keep the original) when it isn't smaller than the source. Doesn't apply to manual jobs that keep the original or burn subtitles.</summary>
     public bool SkipIfNotSmaller { get; set; } = true;
 
+    /// <summary>Auto-convert skips videos already in the chosen video format (H.265 with an H.265 encoder, and so on) at or under the resolution cap: re-encoding them costs hours and mostly loses quality.</summary>
+    public bool SkipSameFormat { get; set; } = true;
+
     /// <summary>Extra saving required before a result is accepted (0 = merely smaller).</summary>
     public int MinSavingsPercent { get; set; } = 0;
 

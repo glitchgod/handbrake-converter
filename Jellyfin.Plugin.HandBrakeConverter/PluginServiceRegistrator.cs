@@ -18,6 +18,7 @@ public class PluginServiceRegistrator : IPluginServiceRegistrator
         serviceCollection.AddSingleton<HandBrakeCapabilities>();
         serviceCollection.AddSingleton<TranscodeStore>();
         serviceCollection.AddHostedService<TranscodeLogWatcher>();
+        serviceCollection.AddHostedService<PlaybackReasonWatcher>();
         serviceCollection.AddSingleton<PlaybackWatcher>();
         serviceCollection.AddSingleton<BacklogScanner>();
         serviceCollection.AddSingleton<WatchDataMover>();

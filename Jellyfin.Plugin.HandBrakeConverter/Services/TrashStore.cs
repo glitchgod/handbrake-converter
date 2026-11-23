@@ -21,8 +21,10 @@ public class TrashEntry
 }
 
 /// <summary>
-/// Holding folder for replaced originals. Nothing here is visible to Jellyfin (it lives outside the libraries); entries are
-/// purged after their retention time or can be restored from the admin page.
+/// Holding folder for replaced originals; entries are purged after their retention time or can be restored from the admin page.
+/// Held files end in ".held", so Jellyfin never adds them to a library even though the folder sits inside the library folder: a held
+/// episode that still looked like a video was picked up by Jellyfin's file watcher and listed as a duplicate under a series named
+/// from its file name.
 /// </summary>
 public class TrashStore
 {
@@ -47,6 +49,46 @@ public class TrashStore
             _log.LogError(ex, "Could not read trash index; starting empty (backup kept)");
             try { File.Copy(_file, _file + ".bad", true); } catch { }
         }
+
+        HideOldEntries();
+    }
+
+    /// <summary>Added to every held file, so it no longer has a video extension and no Jellyfin library ever lists it.</summary>
+    public const string HeldSuffix = ".held";
+
+    /// <summary>How many files held by an older version were renamed at startup (Jellyfin may still list them; a library scan clears them).</summary>
+    public int Hidden { get; private set; }
+
+    /// <summary>Files held by older versions kept their video name; rename them so Jellyfin drops the duplicates it made from them.</summary>
+    private void HideOldEntries()
+    {
+        var changed = false;
+        foreach (var e in _entries)
+        {
+            try
+            {
+                MarkFolder(Path.GetDirectoryName(e.TrashedPath));
+                if (e.TrashedPath.EndsWith(HeldSuffix, StringComparison.Ordinal) || !File.Exists(e.TrashedPath)) continue;
+                File.Move(e.TrashedPath, e.TrashedPath + HeldSuffix);
+                e.TrashedPath += HeldSuffix;
+                changed = true;
+                Hidden++;
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Could not rename held file {Path}", e.TrashedPath); }
+        }
+
+        if (changed)
+        {
+            try { Save(); } catch (Exception ex) { _log.LogError(ex, "Could not save the trash index"); }
+        }
+    }
+
+    /// <summary>A ".ignore" file tells Jellyfin's library scan to skip the folder (a second guard next to the ".held" names).</summary>
+    private static void MarkFolder(string? dir)
+    {
+        if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+        var ignore = Path.Combine(dir, ".ignore");
+        if (!File.Exists(ignore)) File.WriteAllText(ignore, string.Empty);
     }
 
     public const string HiddenFolderName = ".hb-originals";
@@ -83,12 +125,12 @@ public class TrashStore
     {
         var root = holdingRoot;
         Directory.CreateDirectory(root);
-        var ignore = Path.Combine(root, ".ignore"); // tells Jellyfin's library scan to skip this folder
-        if (!File.Exists(ignore)) File.WriteAllText(ignore, string.Empty);
+        MarkFolder(root);
         var entry = new TrashEntry { OriginalPath = sourcePath, Trashed = DateTime.Now, Expires = DateTime.Now.AddDays(Math.Max(1, days)) };
         var folder = Path.Combine(root, entry.Id);
         Directory.CreateDirectory(folder);
-        entry.TrashedPath = Path.Combine(folder, Path.GetFileName(sourcePath));
+        MarkFolder(folder); // the file watcher looks at the file's own folder, not only the top of the holding folder
+        entry.TrashedPath = Path.Combine(folder, Path.GetFileName(sourcePath) + HeldSuffix);
         entry.Size = FileMeta.Length(sourcePath);
         if (copy) File.Copy(sourcePath, entry.TrashedPath);
         else File.Move(sourcePath, entry.TrashedPath); // same drive = rename; other drive = copy + delete
@@ -148,7 +190,11 @@ public class TrashStore
         {
             if (File.Exists(e.TrashedPath)) File.Delete(e.TrashedPath);
             var dir = Path.GetDirectoryName(e.TrashedPath);
-            if (dir != null && Directory.Exists(dir) && !Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);
+            if (dir != null && Directory.Exists(dir))
+            {
+                var ignore = Path.Combine(dir, ".ignore");
+                if (Directory.EnumerateFileSystemEntries(dir).All(f => f == ignore)) Directory.Delete(dir, true);
+            }
         }
         catch (Exception ex) { _log.LogWarning(ex, "Could not remove trashed file {Path}", e.TrashedPath); }
         _entries.Remove(e);

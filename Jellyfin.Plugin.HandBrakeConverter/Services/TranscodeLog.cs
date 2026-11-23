@@ -27,8 +27,15 @@ public class TranscodeSession
     public string DstVideo { get; set; } = string.Empty;
     public int DstHeight { get; set; }
     public string SrcAudio { get; set; } = string.Empty;
+
+    /// <summary>Channels of the source audio track (2 = stereo, 6 = 5.1); 0 when unknown.</summary>
+    public int SrcAudioChannels { get; set; }
+
     public bool AudioTranscoded { get; set; }
     public string DstAudio { get; set; } = string.Empty;
+
+    /// <summary>Channels Jellyfin delivered after re-encoding the audio (2 = the player asked for stereo); 0 when unknown.</summary>
+    public int DstAudioChannels { get; set; }
     public bool BurnedSubtitles { get; set; }
     public bool Tonemapped { get; set; }
     public bool Hardware { get; set; }
@@ -42,6 +49,8 @@ public static class TranscodeLog
     private static readonly Regex VideoRest = new(@"^(?<codec>\w+)[^,]*,\s*(?<pix>[a-z0-9_]+)(?:\((?<cs>[^)]*)\))?.*?\b(?<w>\d{3,5})x(?<h>\d{3,5})\b", RegexOptions.Compiled);
     private static readonly Regex VCodec = new(@"-c(?:odec)?:v(?::\d+)?\s+(\S+)", RegexOptions.Compiled);
     private static readonly Regex ACodec = new(@"-c(?:odec)?:a(?::\d+)?\s+(\S+)", RegexOptions.Compiled);
+    private static readonly Regex AChannels = new(@"-ac(?::\d+)?\s+(\d+)", RegexOptions.Compiled);
+    private static readonly Regex ChannelWord = new(@",\s*(?:(?<w>mono|stereo|2\.1|4\.0|quad|5\.0|5\.1|6\.1|7\.1)(?:\([^)]*\))?|(?<n>\d+) channels)\s*(?:,|$)", RegexOptions.Compiled);
     private static readonly Regex MapIn = new(@"-map\s+0:(\d+)", RegexOptions.Compiled);
     private static readonly Regex InputArg = new(@"-i\s+(?:file:)?""[^""]*""|-i\s+\S+", RegexOptions.Compiled);
     private static readonly Regex Burn = new(@"\boverlay(?:_\w+)?\b|\bsubtitles=|\bass=", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -56,6 +65,15 @@ public static class TranscodeLog
         if (n.Contains("av1") || n.Contains("aom")) return "av1";
         if (n.Contains("vp9")) return "vp9";
         return n;
+    }
+
+    /// <summary>Channel count from ffmpeg's stream text ("eac3, 48000 Hz, 5.1(side), fltp" -> 6), or 0.</summary>
+    public static int Channels(string streamText)
+    {
+        var m = ChannelWord.Match(streamText);
+        if (!m.Success) return 0;
+        if (m.Groups["n"].Success) return int.Parse(m.Groups["n"].Value, CultureInfo.InvariantCulture);
+        return m.Groups["w"].Value switch { "mono" => 1, "stereo" => 2, "2.1" => 3, "4.0" or "quad" => 4, "5.0" => 5, "5.1" => 6, "6.1" => 7, "7.1" => 8, _ => 0 };
     }
 
     /// <summary>null when the log is not a video playback that needed re-encoding (music, direct stream, unreadable).</summary>
@@ -95,19 +113,35 @@ public static class TranscodeLog
         var audioIdx = mapped.Where(i => input.TryGetValue(i, out var v) && v.Kind == "Audio").Cast<int?>().FirstOrDefault()
             ?? input.Where(k => k.Value.Kind == "Audio").Select(k => (int?)k.Key).FirstOrDefault();
         var srcAudio = audioIdx != null ? input[audioIdx.Value].Text.Split(new[] { ' ', ',' }, StringSplitOptions.RemoveEmptyEntries)[0] : string.Empty;
+        var srcChannels = audioIdx != null ? Channels(input[audioIdx.Value].Text) : 0;
 
         // The video stream of the output, for the resolution that was actually delivered.
         var outAt = Array.FindIndex(lines, l => l.StartsWith("Output #0", StringComparison.Ordinal));
         var dstHeight = 0;
+        var dstChannels = 0;
+        bool seenVideo = false, seenAudio = false;
         if (outAt >= 0)
             foreach (var line in lines.Skip(outAt + 1))
             {
                 var s = StreamLine.Match(line);
-                if (!s.Success || s.Groups["kind"].Value != "Video") continue;
-                var v = VideoRest.Match(s.Groups["rest"].Value);
-                if (v.Success) dstHeight = int.Parse(v.Groups["h"].Value, CultureInfo.InvariantCulture);
-                break;
+                if (!s.Success) continue;
+                if (s.Groups["kind"].Value == "Video" && !seenVideo)
+                {
+                    seenVideo = true;
+                    var v = VideoRest.Match(s.Groups["rest"].Value);
+                    if (v.Success) dstHeight = int.Parse(v.Groups["h"].Value, CultureInfo.InvariantCulture);
+                }
+                else if (s.Groups["kind"].Value == "Audio" && !seenAudio)
+                {
+                    seenAudio = true;
+                    dstChannels = Channels(s.Groups["rest"].Value);
+                }
+
+                if (seenVideo && seenAudio) break;
             }
+
+        // The command line's -ac is what Jellyfin asked for, even when the output summary isn't in the part of the log that was read.
+        if (audioTranscoded && AChannels.Match(flags) is { Success: true } acm) dstChannels = int.Parse(acm.Groups[1].Value, CultureInfo.InvariantCulture);
 
         var cs = video.Groups["cs"].Value;
         var time = NameTime.Match(fileName) is { Success: true } t
@@ -127,8 +161,10 @@ public static class TranscodeLog
             DstVideo = videoCopy ? string.Empty : Family(vc.Groups[1].Value),
             DstHeight = videoCopy ? 0 : dstHeight,
             SrcAudio = srcAudio,
+            SrcAudioChannels = srcChannels,
             AudioTranscoded = audioTranscoded,
             DstAudio = audioTranscoded ? ac.Groups[1].Value : string.Empty,
+            DstAudioChannels = audioTranscoded ? dstChannels : 0,
             BurnedSubtitles = !videoCopy && Burn.IsMatch(flags),
             Tonemapped = !videoCopy && flags.Contains("tonemap", StringComparison.OrdinalIgnoreCase),
             Hardware = !videoCopy && Regex.IsMatch(vc.Groups[1].Value, "nvenc|qsv|vaapi|videotoolbox|amf|v4l2", RegexOptions.IgnoreCase)

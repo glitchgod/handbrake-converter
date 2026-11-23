@@ -22,7 +22,10 @@ public class Job
     /// <summary>true = convert even if this file was already converted with the same settings.</summary>
     public bool Force { get; set; }
 
-    /// <summary>"" = a manual job. "auto" = the place of one library's Auto-convert backlog in the queue order (not a conversion itself).</summary>
+    /// <summary>
+    /// "" = a manual job. "auto" = the place of one library's Auto-convert backlog in the queue order (not a conversion itself).
+    /// "subs" = a subtitle repair (Tools > Repair giant subtitles): only the subtitle tracks are rewritten, the video is never re-encoded.
+    /// </summary>
     public string Kind { get; set; } = string.Empty;
 
     /// <summary>For Kind "auto": the library this entry stands for.</summary>

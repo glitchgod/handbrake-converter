@@ -19,6 +19,14 @@ public class RemoveRequest
     public string[] Ids { get; set; } = Array.Empty<string>();
 }
 
+public class CheckTitleRequest
+{
+    public string ItemId { get; set; } = string.Empty;
+
+    /// <summary>The settings to check against (the library's own or Conversion settings, as shown on the page).</summary>
+    public ConversionProfile? Profile { get; set; }
+}
+
 public class QueueRequest
 {
     /// <summary>Movies, episodes, seasons or series (the last two expand to every episode).</summary>
@@ -390,13 +398,58 @@ public class HandBrakeConverterController : ControllerBase
         return Ok(new { Ok = ok, Message = message });
     }
 
-    /// <summary>What Jellyfin's own transcode logs say gets re-encoded when people watch, with suggested settings.</summary>
+    /// <summary>How playback went (Jellyfin's transcode reasons per play and its ffmpeg logs), with one suggested value per setting.</summary>
+    /// <summary>
+    /// Tools > Check a title: one movie or episode as it is (video, audio, subtitles with their styles and sizes), what the given settings
+    /// would make of it, and how it has played (Jellyfin's reason for each conversion while watching). Reads only.
+    /// </summary>
+    [HttpPost("CheckTitle")]
+    public async Task<ActionResult> CheckTitle([FromBody] CheckTitleRequest req, CancellationToken ct)
+    {
+        if (!Guid.TryParse(req.ItemId, out var id)) return BadRequest(new { Error = "itemId required" });
+        var item = _library.GetItemById(id);
+        if (item == null || string.IsNullOrEmpty(item.Path) || !System.IO.File.Exists(item.Path)) return NotFound(new { Error = "That title has no video file." });
+        var report = await _service.CheckTitleAsync(item.Path, req.Profile ?? Plugin.Instance!.Configuration.Defaults, ct).ConfigureAwait(false);
+
+        // How it played: Jellyfin's own reasons per playback; before those were recorded, its transcode logs.
+        try { _transcodes.Scan(); } catch { }
+        var plays = _transcodes.Plays(365).Where(p => p.Path == item.Path).OrderByDescending(p => p.Time).Take(10)
+            .Select(p => new PlayRow(p.Time, p.Client, p.Reasons.Count == 0 && p.VideoDirect && p.AudioDirect ? "Played directly" : "Converted while watching",
+                string.Join(", ", p.Reasons.Select(TranscodeInsights.Friendly)))).ToList();
+        if (plays.Count == 0)
+            plays = _transcodes.Sessions(365).Where(s => s.Path == item.Path).OrderByDescending(s => s.Time).Take(10)
+                .Select(s => new PlayRow(s.Time, string.Empty, "Converted while watching",
+                    string.Join(", ", new[] { s.VideoTranscoded ? "video re-encoded" : null, s.AudioTranscoded ? "audio re-encoded" : null, s.BurnedSubtitles ? "subtitles burned in" : null, s.Tonemapped ? "HDR tone-mapped" : null }.Where(x => x != null)))).ToList();
+        return Ok(report with { Plays = plays });
+    }
+
+    /// <summary>Tools > Update suggestions: progress of the manual check of Jellyfin's newest transcode logs, and the suggestions it gave.</summary>
+    [HttpGet("SuggestionCheck")]
+    public ActionResult SuggestionCheck() => Ok(_transcodes.CheckStatus());
+
+    /// <summary>Starts reading Jellyfin's newest transcode logs (default 100) and working the suggestions out again (background; poll SuggestionCheck).</summary>
+    [HttpPost("SuggestionCheck")]
+    public ActionResult SuggestionCheckStart([FromQuery] int limit = 100) =>
+        _transcodes.StartCheck(limit) ? Ok(_transcodes.CheckStatus()) : Conflict(new { Error = "A check is already running." });
+
+    /// <summary>Tools > Repair giant subtitles: progress and findings of the scan.</summary>
+    [HttpGet("GiantSubtitles")]
+    public ActionResult GiantSubtitles() => Ok(_service.GiantStatus());
+
+    /// <summary>Starts looking through every MP4 in the libraries for giant MOV_TEXT subtitles (background; poll GiantSubtitles).</summary>
+    [HttpPost("GiantSubtitles/Scan")]
+    public ActionResult GiantSubtitlesScan() => _service.StartGiantScan() ? Ok(_service.GiantStatus()) : Conflict(new { Error = "A scan is already running." });
+
+    /// <summary>Queues a subtitles-only repair for every file the scan found (no re-encode).</summary>
+    [HttpPost("GiantSubtitles/Fix")]
+    public ActionResult GiantSubtitlesFix() => Ok(new { Added = _service.QueueGiantRepairs() });
+
     [HttpGet("Insights")]
     public ActionResult Insights([FromQuery] int days = 60)
     {
         days = Math.Clamp(days, 1, 365);
         try { _transcodes.Scan(); } catch { }
-        var result = TranscodeInsights.Analyze(_transcodes.Sessions(days), days);
+        var result = TranscodeInsights.Analyze(_transcodes.Sessions(days), _transcodes.Plays(days), days);
         result.LogDirectory = _transcodes.LogDirectory;
         return Ok(result);
     }
@@ -413,7 +466,7 @@ public class HandBrakeConverterController : ControllerBase
         if (e == null || e.Result != "Failed") return NotFound(new { Error = "Nothing to retry." });
         if (e.JobId.Length > 0)
         {
-            if (!_jobs.Requeue(e.JobId)) return NotFound(new { Error = "That job is no longer in the Queue. Add it again from Manual convert." });
+            if (!_jobs.Requeue(e.JobId)) return NotFound(new { Error = "That job is no longer in the Queue. Add it again from Convert titles." });
         }
         else
         {

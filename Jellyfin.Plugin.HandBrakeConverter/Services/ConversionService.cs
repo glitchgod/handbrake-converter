@@ -159,6 +159,174 @@ public sealed class ConversionService : BackgroundService
         return false;
     }
 
+    // ------------------------------------------------------------------ repair of giant subtitles made by older versions
+
+    /// <summary>Progress and result of Tools > Repair giant subtitles.</summary>
+    public sealed class GiantScan
+    {
+        public bool Running { get; set; }
+        public int Checked { get; set; }
+        public int Total { get; set; }
+        public List<GiantFile> Found { get; set; } = new();
+        public string Message { get; set; } = string.Empty;
+    }
+
+    /// <summary>A video whose subtitles are drawn giant by some players, and why.</summary>
+    public sealed record GiantFile(string Path, string Why);
+
+    private readonly object _giantLock = new();
+    private GiantScan _giant = new();
+
+    public GiantScan GiantStatus()
+    {
+        lock (_giantLock) return new GiantScan { Running = _giant.Running, Checked = _giant.Checked, Total = _giant.Total, Found = _giant.Found.ToList(), Message = _giant.Message };
+    }
+
+    /// <summary>
+    /// Looks through every MP4 and MKV in the libraries for subtitles older versions made giant: MOV_TEXT that keeps a styled track's
+    /// font size on a much smaller canvas (a line can fill a quarter of the screen), and SRT, inside the file or next to it, carrying
+    /// font size tags. Runs in the background.
+    /// </summary>
+    public bool StartGiantScan()
+    {
+        lock (_giantLock)
+        {
+            if (_giant.Running) return false;
+            _giant = new GiantScan { Running = true, Message = "Listing video files…" };
+        }
+
+        _ = Task.Run(GiantScanAsync);
+        return true;
+    }
+
+    private async Task GiantScanAsync()
+    {
+        try
+        {
+            var files = LibraryVideoFiles();
+            lock (_giantLock) { _giant.Total = files.Count; _giant.Message = "Checking the subtitles…"; }
+            foreach (var f in files)
+            {
+                try
+                {
+                    var why = new List<string>();
+                    var info = await _probe.ProbeAsync(f, CancellationToken.None).ConfigureAwait(false);
+                    if (info?.Subs is { Count: > 0 })
+                    {
+                        info = await MeasureTextAsync(f, info, CancellationToken.None).ConfigureAwait(false);
+                        var worst = info.Subs!.Select(s => s.TextScale).DefaultIfEmpty(0).Max();
+                        if (worst > 0.1) why.Add($"MOV_TEXT lines {worst:P0} of the picture height");
+                        var tagged = info.Subs!.Count(s => s.SizeTags);
+                        if (tagged > 0) why.Add($"{tagged} SRT track(s) with font size tags");
+                    }
+
+                    var tagged2 = TaggedSidecars(f);
+                    if (tagged2.Count > 0) why.Add($"{tagged2.Count} .srt file(s) with font size tags");
+                    if (why.Count > 0) lock (_giantLock) _giant.Found.Add(new GiantFile(f, string.Join(", ", why)));
+                }
+                catch (Exception ex) { _log.LogDebug(ex, "Could not check the subtitles of {File}", f); }
+
+                lock (_giantLock) _giant.Checked++;
+            }
+
+            lock (_giantLock) _giant.Message = _giant.Found.Count == 0 ? "No giant subtitles found." : $"{_giant.Found.Count} file(s) with giant subtitles.";
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Giant subtitle scan failed");
+            lock (_giantLock) _giant.Message = "The scan stopped: " + ex.Message;
+        }
+        finally
+        {
+            lock (_giantLock) _giant.Running = false;
+        }
+    }
+
+    /// <summary>The .srt files next to a video that carry font size tags.</summary>
+    private static List<string> TaggedSidecars(string video)
+    {
+        var result = new List<string>();
+        foreach (var s in SubtitleSidecars.FilesNextTo(video).Where(x => x.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)))
+        {
+            try { if (SubtitleCheck.HasSizeTags(File.ReadAllText(s))) result.Add(s); } catch { }
+        }
+
+        return result;
+    }
+
+    /// <summary>Every MP4, M4V and MKV in the libraries, skipping hidden folders (such as the holding folder for replaced originals).</summary>
+    private List<string> LibraryVideoFiles()
+    {
+        var roots = new List<string>();
+        foreach (var f in _library.GetVirtualFolders())
+            if (f.Locations != null) roots.AddRange(f.Locations);
+        var options = new EnumerationOptions { RecurseSubdirectories = true, IgnoreInaccessible = true };
+        return roots.Where(Directory.Exists).Distinct(StringComparer.Ordinal)
+            .SelectMany(r => Directory.EnumerateFiles(r, "*", options).Where(p => !Path.GetRelativePath(r, p).Split(Path.DirectorySeparatorChar).Any(seg => seg.StartsWith('.'))))
+            .Where(p => IsMp4(Path.GetExtension(p)) || Path.GetExtension(p).Equals(".mkv", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.Ordinal).OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    /// <summary>Queues a subtitle repair for every file the scan found. Returns how many were added.</summary>
+    public int QueueGiantRepairs()
+    {
+        var found = GiantStatus().Found;
+        var profile = System.Text.Json.JsonSerializer.Deserialize<ConversionProfile>(System.Text.Json.JsonSerializer.Serialize(Cfg.Defaults)) ?? new ConversionProfile();
+        profile.DeleteOriginal = true; // the repaired file takes the place of the giant one (which is held like any replaced original)
+        var jobs = found.Select(g =>
+        {
+            var itemId = string.Empty;
+            try { itemId = _library.FindByPath(g.Path, false)?.Id.ToString("N") ?? string.Empty; } catch { }
+            return new Job { Path = g.Path, ItemId = itemId, Title = Path.GetFileNameWithoutExtension(g.Path) + " (subtitle repair)", Kind = "subs", IgnoreSchedule = true, Profile = profile };
+        }).ToList();
+        var (added, _) = _jobs.Add(jobs);
+        _watcher.Wake();
+        return added;
+    }
+
+    /// <summary>
+    /// A subtitle repair: the file keeps its video, audio and container; its text subtitles are rewritten by today's rules (plain text
+    /// as .srt files next to an MP4, drawn by the player at its normal size). Every language is kept. Never re-encodes.
+    /// </summary>
+    private async Task<bool> RepairSubtitlesAsync(Work w, CancellationToken ct)
+    {
+        // .srt files next to the video only need their font tags removed: no ffmpeg needed.
+        var cleaned = 0;
+        foreach (var file in TaggedSidecars(w.Path))
+        {
+            try
+            {
+                var tmp = file + ".hbtmp";
+                await File.WriteAllTextAsync(tmp, SubtitleCheck.CleanSrt(await File.ReadAllTextAsync(file, ct).ConfigureAwait(false)), ct).ConfigureAwait(false);
+                FileMeta.CopyAccess(file, tmp);
+                File.Move(tmp, file, true);
+                cleaned++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogWarning(ex, "Could not clean {File}", file); }
+        }
+
+        var (hb, _) = ResolveContainer(w.Profile, w.Path);
+        hb.SubtitleMode = "keep";
+        hb.SubtitleLanguages = string.Empty;
+        hb.SubtitleFormat = "srt";
+        if (await TryFixSubtitlesAsync(w, hb, Path.GetExtension(w.Path), ct).ConfigureAwait(false)) return true;
+
+        if (cleaned > 0)
+        {
+            var done = $"Removed font size tags from {cleaned} subtitle file(s) next to it; the video file was already fine.";
+            if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Done");
+            Record(w, "Converted", done, new FileInfo(w.Path).Length, new FileInfo(w.Path).Length, 0, Path.GetFileName(w.Path));
+            _board.Rest("Idle", done);
+            return true;
+        }
+
+        const string why = "Subtitles are already fine; nothing to repair.";
+        if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Skipped", why);
+        Record(w, "Skipped", why);
+        _board.Rest("Idle", why);
+        return true;
+    }
+
     /// <summary>Pause freezes a running encode and stops anything new from starting; Continue undoes it. Persisted.</summary>
     public void SetPaused(bool paused)
     {
@@ -178,6 +346,7 @@ public sealed class ConversionService : BackgroundService
         public TrashEntry? Held { get; set; }
         public List<string> OriginalSubFiles { get; set; } = new();
         public int[]? AudioTracks { get; init; }
+        public IReadOnlyList<AudioStream>? AudioStreams { get; init; }
         public bool Deinterlace { get; init; }
         public string SidecarNote { get; set; } = string.Empty;
         public Job? Job => Work.Job;
@@ -195,6 +364,13 @@ public sealed class ConversionService : BackgroundService
         catch (OperationCanceledException) { return; }
 
         try { CleanupStaleTemps(); } catch (Exception ex) { _log.LogWarning(ex, "Startup clean-up failed"); }
+
+        // Originals held by an older version were renamed so Jellyfin can't list them; a scan removes the duplicates it already made.
+        if (_trash.Hidden > 0)
+        {
+            _log.LogInformation("Hid {Count} held originals from Jellyfin; scanning libraries to remove the duplicates they caused", _trash.Hidden);
+            try { _library.QueueLibraryScan(); } catch (Exception ex) { _log.LogWarning(ex, "Library scan request failed"); }
+        }
 
         await Task.WhenAll(_lanes.Select(l => Task.Run(() => LaneLoopAsync(l, stoppingToken), stoppingToken))).ConfigureAwait(false);
     }
@@ -316,7 +492,7 @@ public sealed class ConversionService : BackgroundService
         var available = await _caps.EncodersAsync(launcher, ct).ConfigureAwait(false);
         if (available.Count > 0 && !available.Contains(encoder, StringComparer.OrdinalIgnoreCase))
         {
-            var why = $"The encoder '{encoder}' is not available in this HandBrake. Pick another under Default settings > Video encoder (see HandBrake & tools for the ones that work here).";
+            var why = $"The encoder '{encoder}' is not available in this HandBrake. Pick another under Conversion settings > Video encoder (Tools > Encoder test shows the ones that work here).";
             if (work.Job != null) Fail(work, why); else _board.Rest("Error", why);
             return work.Job != null;
         }
@@ -335,6 +511,7 @@ public sealed class ConversionService : BackgroundService
 
         _stopAuto = false; // a stop request only ever applies to the automatic conversion that was running when it was made
         if (!File.Exists(src)) { Fail(w, "Source file not found: " + src); return true; }
+        if (w.Job is { Kind: "subs" }) return await RepairSubtitlesAsync(w, ct).ConfigureAwait(false);
         if (VideoFiles.Unsupported(src, out var unsupportedWhy))
         {
             var msg = "Left alone: " + unsupportedWhy + ", which this plugin cannot convert.";
@@ -421,6 +598,16 @@ public sealed class ConversionService : BackgroundService
         }
 
         var hdrNote = await HdrDecisionAsync(hb, info, launcher, ct).ConfigureAwait(false);
+
+        // Auto-convert only: a video already in the chosen format, no taller than the cap, would cost hours to re-encode for a file that
+        // is rarely smaller and never better.
+        if (hdrNote == null && w.Job == null && cfg.SkipSameFormat && info != null && info.VideoCodec.Length > 0)
+        {
+            var target = HandBrakeArgs.Family(hb.Encoder);
+            if (target.Length > 0 && TranscodeLog.Family(info.VideoCodec) == target && (hb.MaxHeight <= 0 || info.Height <= hb.MaxHeight))
+                hdrNote = $"Already {TranscodeInsights.Name(target)}; re-encoding would only lose quality (convert it by hand to force it).";
+        }
+
         if (hdrNote != null)
         {
             _log.LogInformation("{Src}: {Why}", src, hdrNote);
@@ -431,17 +618,33 @@ public sealed class ConversionService : BackgroundService
             return true;
         }
 
+        // A 10-bit source stays 10-bit when the encoder has a 10-bit version (8-bit would add banding to gradients like skies and dark
+        // scenes). H.264 has none that plays widely, so H.264 output stays 8-bit.
+        if (hb.BitDepth != "8bit" && info is { BitDepth: >= 10 } && HandBrakeArgs.TenBit(hb.Encoder) is { } tenBit && tenBit != hb.Encoder)
+        {
+            var encoders = await _caps.EncodersAsync(launcher, ct).ConfigureAwait(false);
+            if (encoders.Count == 0 || encoders.Contains(tenBit, StringComparer.OrdinalIgnoreCase))
+            {
+                _log.LogInformation("{Src} is {Bits}-bit: encoding with {Encoder}", src, info.BitDepth, tenBit);
+                hb.Encoder = tenBit;
+            }
+        }
+
         // Non-video extension so Jellyfin never scans a half-written file.
         // Subtitles are chosen and written by ffmpeg after the encode (HandBrake would store text subtitles as SSA/ASS and cannot pick tracks
         // by forced flag). Without ffmpeg HandBrake keeps all tracks itself.
         SubPlan? subPlan = null;
         var ffmpeg = hb.SubtitleMode == "keep" && info?.Subs is { Count: > 0 } ? _probe.FfmpegPath() : null;
-        if (ffmpeg != null) subPlan = SubtitlePlanner.Make(info!.Subs, hb, IsMp4(ext));
-
         var audioTracks = AudioPlanner.Select(info?.AudioLangs, hb.AudioLanguages);
+        if (ffmpeg != null)
+        {
+            info = await MeasureTextAsync(src, info!, ct).ConfigureAwait(false);
+            subPlan = SubtitlePlanner.Make(info.Subs, hb, IsMp4(ext), KeptAudioLanguages(info, audioTracks));
+        }
+        var audioStreams = KeptAudio(info, audioTracks);
         var deinterlace = hb.Deinterlace == "auto" && info is { Interlaced: true };
         var plan = new Plan(w, hb, src, final, final + ".hbtmp", size, keepDays, info) { Signature = signature, SubPlan = subPlan, Ffmpeg = ffmpeg,
-            InPlace = inPlace, AudioTracks = audioTracks, Deinterlace = deinterlace,
+            InPlace = inPlace, AudioTracks = audioTracks, AudioStreams = audioStreams, Deinterlace = deinterlace,
             LinkNote = !isLinked ? string.Empty : inPlace ? $"; the file was {linkedHow}, so every link to it now holds the converted video" : $"; the file was {linkedHow}, so the other copy still holds the old data" };
         TryDelete(plan.Temp);
         _state.TrackTemp(plan.Temp);
@@ -466,7 +669,17 @@ public sealed class ConversionService : BackgroundService
         var sidecars = new List<(string Temp, string Final)>();
         if (subPlan is { External.Count: > 0 } && ffmpeg != null)
         {
-            sidecars = await ExtractSidecarsAsync(ffmpeg, plan.Source, SubtitleSidecars.Plan(final, subPlan.External), w.Job, ct).ConfigureAwait(false);
+            var planned = SubtitleSidecars.Plan(final, subPlan.External);
+            var (made, failed) = await ExtractSidecarsAsync(ffmpeg, plan.Source, planned, w.Job, ct).ConfigureAwait(false);
+            sidecars = made;
+            if (LostSubtitles(subPlan, planned, failed) is { } lost)
+            {
+                FinishSidecars(sidecars, false);
+                TryDelete(plan.Temp);
+                Fail(w, lost, plan.Clock.Elapsed.TotalSeconds);
+                return true;
+            }
+
             if (sidecars.Count > 0) plan.SidecarNote = $"; {sidecars.Count} subtitle file(s) written next to it";
         }
 
@@ -487,7 +700,7 @@ public sealed class ConversionService : BackgroundService
     {
         if (info == null || !(info.IsHdr || info.DolbyVision) || hb.HdrMode == "ignore") return null;
         var kind = info.DolbyVision ? "a Dolby Vision" : "an HDR";
-        if (hb.HdrMode != "keep") return $"Left alone: this is {kind} video and HDR videos are set to be skipped (Default settings > Video > HDR videos).";
+        if (hb.HdrMode != "keep") return $"Left alone: this is {kind} video and HDR videos are set to be skipped (Conversion settings > Video > HDR videos).";
         if (info.DolbyVision) return "Left alone: Dolby Vision can't be kept by a re-encode (change 'HDR videos' to convert it anyway).";
 
         var tenBit = HandBrakeArgs.TenBit(hb.Encoder);
@@ -497,6 +710,22 @@ public sealed class ConversionService : BackgroundService
             return $"Left alone: the 10-bit encoder '{tenBit}' needed to keep HDR is not available in this HandBrake.";
         hb.Encoder = tenBit;
         return null;
+    }
+
+    /// <summary>The audio tracks that will be encoded, in HandBrake's order; null when ffprobe's view doesn't line up with the file.</summary>
+    private static IReadOnlyList<AudioStream>? KeptAudio(MediaInfo? info, int[]? audioTracks)
+    {
+        if (info?.Audio is not { Count: > 0 } all || all.Count != info.AudioTracks) return null;
+        if (audioTracks == null) return all;
+        return audioTracks.All(n => n >= 1 && n <= all.Count) ? audioTracks.Select(n => all[n - 1]).ToList() : null;
+    }
+
+    /// <summary>Languages of the audio tracks the converted file keeps; null when unknown.</summary>
+    private static IReadOnlyList<string>? KeptAudioLanguages(MediaInfo? info, int[]? audioTracks)
+    {
+        if (info?.AudioLangs is not { Count: > 0 } all) return null;
+        if (audioTracks == null) return all;
+        return audioTracks.Where(n => n >= 1 && n <= all.Count).Select(n => all[n - 1]).ToList();
     }
 
     /// <summary>
@@ -534,7 +763,7 @@ public sealed class ConversionService : BackgroundService
         HandBrakeRun run;
         try
         {
-            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp, noSubtitles: p.SubPlan != null, audioTracks: p.AudioTracks, deinterlace: p.Deinterlace), Cfg.LowPriority,
+            run = HandBrakeRun.Start(launcher, HandBrakeArgs.Build(p.HandBrake, p.Source, p.Temp, noSubtitles: p.SubPlan != null, audioTracks: p.AudioTracks, deinterlace: p.Deinterlace, audioStreams: p.AudioStreams), Cfg.LowPriority,
                 (pct, eta) => _board.Set(s => { s.Progress = pct; if (eta != null) s.Eta = eta; }));
         }
         catch (Exception ex)
@@ -611,7 +840,9 @@ public sealed class ConversionService : BackgroundService
     {
         var mux = p.Temp + ".sub";
         _board.Set(s => { s.State = "Encoding"; s.Message = "Adding subtitles…"; s.Progress = 100; });
-        var (ok, tail) = await RunFfmpegAsync(p.Ffmpeg!, SubtitleMux.Args(p.Temp, p.Source, p.SubPlan!, IsMp4(Path.GetExtension(p.Final)), mux), p.Job, ct).ConfigureAwait(false);
+        var (clean, cleanDir) = await CleanSrtTracksAsync(p.Ffmpeg!, p.Source, p.SubPlan!, p.Job, ct).ConfigureAwait(false);
+        var (ok, tail) = await RunFfmpegAsync(p.Ffmpeg!, SubtitleMux.Args(p.Temp, p.Source, p.SubPlan!, IsMp4(Path.GetExtension(p.Final)), mux, clean), p.Job, ct).ConfigureAwait(false);
+        try { cleanDir?.Delete(true); } catch { }
         if (ok && File.Exists(mux) && new FileInfo(mux).Length > 100_000)
         {
             File.Move(mux, p.Temp, true);
@@ -640,19 +871,266 @@ public sealed class ConversionService : BackgroundService
         return false;
     }
 
-    /// <summary>Writes the given subtitle tracks of <paramref name="source"/> to temporary files. A track that fails is skipped (never fails the job).</summary>
-    private async Task<List<(string Temp, string Final)>> ExtractSidecarsAsync(string ffmpeg, string source, List<(SubStream Track, string Path)> items, Job? job, CancellationToken ct)
+    /// <summary>
+    /// Compares every subtitle track kept inside <paramref name="result"/> with the same track in <paramref name="source"/>: styled tracks
+    /// must keep their canvas size, every style (font, size, colours, position) and every line; text tracks every line at the same time;
+    /// copied PGS pictures their exact size. null = all the same; otherwise what changed (the result is then not used).
+    /// </summary>
+    private async Task<string?> CheckSubtitlesAsync(string ffmpeg, string source, string result, SubPlan plan, Job? job, CancellationToken ct)
+    {
+        var items = plan.Keep.Select((t, i) => (Track: t, Out: i, Format: SubtitleCheck.DumpFormat(t.Codec, plan.OutCodecs[i]))).Where(x => x.Format.Length > 0).ToList();
+        if (items.Count == 0) return null;
+        _board.Set(s => { s.State = "Verifying"; s.Message = "Checking the subtitles…"; s.Progress = 100; });
+        DirectoryInfo? dir = null;
+        try
+        {
+            dir = Directory.CreateTempSubdirectory("hbconv-subs-");
+            var folder = dir.FullName;
+            string P(string side, int i, string f) => Path.Combine(folder, $"{side}{i}.{f}");
+            var (okA, tailA) = await RunFfmpegAsync(ffmpeg, SubtitleCheck.DumpArgs(source, items.Select(x => (x.Track.Index, x.Format, P("a", x.Out, x.Format)))), job, ct).ConfigureAwait(false);
+            var (okB, tailB) = await RunFfmpegAsync(ffmpeg, SubtitleCheck.DumpArgs(result, items.Select(x => (x.Out, x.Format, P("b", x.Out, x.Format)))), job, ct).ConfigureAwait(false);
+            if (!okA) { _log.LogWarning("Could not read the original's subtitles to compare them: {Why}", tailA); return null; } // can't compare: the track count check still applies
+            if (!okB) return "Could not read the subtitles of the converted file (" + tailB + "); discarded it and kept the original.";
+
+            foreach (var x in items)
+            {
+                var a = P("a", x.Out, x.Format);
+                var b = P("b", x.Out, x.Format);
+                if (!File.Exists(a)) continue;
+                if (!File.Exists(b)) return $"Subtitle track {x.Out + 1} ({x.Track.Language}) is missing from the converted file; discarded it and kept the original.";
+                string? why = x.Format switch
+                {
+                    "ass" => SubtitleCheck.CompareAss(SubtitleCheck.ParseAss(await File.ReadAllTextAsync(a, ct).ConfigureAwait(false)), SubtitleCheck.ParseAss(await File.ReadAllTextAsync(b, ct).ConfigureAwait(false))),
+                    "srt" => SubtitleCheck.CompareText(SubtitleCheck.ParseSrt(await File.ReadAllTextAsync(a, ct).ConfigureAwait(false)), SubtitleCheck.ParseSrt(await File.ReadAllTextAsync(b, ct).ConfigureAwait(false))),
+                    _ => new FileInfo(a).Length == new FileInfo(b).Length ? null : "its pictures are not the same as the original's"
+                };
+                if (why != null)
+                    return $"Subtitle track {x.Out + 1} ({(x.Track.Language.Length > 0 ? x.Track.Language : "und")}, {x.Track.Codec.ToUpperInvariant()}) doesn't match the original: {why}. Discarded it and kept the original.";
+            }
+
+            return null;
+        }
+        finally
+        {
+            try { dir?.Delete(true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// Reads the look of the given text tracks from their first seconds: styled tracks as they are, MOV_TEXT decoded the way players and
+    /// Jellyfin draw it. Runs on its own (not through the conversion lane), at most 2 minutes.
+    /// </summary>
+    private async Task<Dictionary<int, AssLook>> ReadLooksAsync(string ffmpeg, string path, IEnumerable<SubStream> tracks, CancellationToken ct)
+    {
+        var heads = await ReadHeadsAsync(ffmpeg, path, tracks.Select(t => (t, SubtitlePlanner.IsStyled(t.Codec) ? "ass" : "assx")), 30, ct).ConfigureAwait(false);
+        return heads.ToDictionary(h => h.Key, h => SubtitleCheck.ParseAss(h.Value));
+    }
+
+    /// <summary>The first <paramref name="seconds"/> of each given subtitle track as text, in the given dump format (see SubtitleCheck.DumpArgs).</summary>
+    private async Task<Dictionary<int, string>> ReadHeadsAsync(string ffmpeg, string path, IEnumerable<(SubStream Track, string Format)> tracks, double seconds, CancellationToken ct)
+    {
+        var looks = new Dictionary<int, string>();
+        var list = tracks.ToList();
+        if (list.Count == 0) return looks;
+        DirectoryInfo? dir = null;
+        try
+        {
+            dir = Directory.CreateTempSubdirectory("hbconv-look-");
+            var folder = dir.FullName;
+            var psi = new System.Diagnostics.ProcessStartInfo(ffmpeg) { RedirectStandardError = true, RedirectStandardOutput = true, UseShellExecute = false };
+            foreach (var arg in SubtitleCheck.DumpArgs(path, list.Select(t => (t.Track.Index, t.Format, Path.Combine(folder, t.Track.Index + ".sub"))), seconds: seconds))
+                psi.ArgumentList.Add(arg);
+            using var proc = System.Diagnostics.Process.Start(psi);
+            if (proc == null) return looks;
+            _ = proc.StandardError.ReadToEndAsync(ct);
+            _ = proc.StandardOutput.ReadToEndAsync(ct);
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            limit.CancelAfter(TimeSpan.FromMinutes(2));
+            try { await proc.WaitForExitAsync(limit.Token).ConfigureAwait(false); }
+            catch (OperationCanceledException) { try { proc.Kill(true); } catch { } if (ct.IsCancellationRequested) throw; return looks; }
+            if (proc.ExitCode != 0) return looks;
+            foreach (var t in list)
+            {
+                var f = Path.Combine(folder, t.Track.Index + ".sub");
+                if (File.Exists(f)) looks[t.Track.Index] = await File.ReadAllTextAsync(f, ct).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException) { _log.LogDebug(ex, "Could not read subtitle styles of {Path}", path); }
+        finally { try { dir?.Delete(true); } catch { } }
+        return looks;
+    }
+
+    /// <summary>
+    /// Measures how big each MOV_TEXT track is drawn (<see cref="SubStream.TextScale"/>; only reported, never decides anything) and finds
+    /// SRT tracks carrying font size tags from older versions (<see cref="SubStream.SizeTags"/>; those are rewritten without the tags).
+    /// </summary>
+    private async Task<MediaInfo> MeasureTextAsync(string path, MediaInfo info, CancellationToken ct)
+    {
+        static bool IsSrt(string c) => c.Equals("subrip", StringComparison.OrdinalIgnoreCase) || c.Equals("srt", StringComparison.OrdinalIgnoreCase);
+        var tracks = info.Subs?.Where(t => SubtitlePlanner.IsMovText(t.Codec) || IsSrt(t.Codec)).ToList();
+        var ffmpeg = _probe.FfmpegPath();
+        if (tracks is not { Count: > 0 } || ffmpeg == null) return info;
+        // Ten minutes is enough to meet the first lines of nearly any track; only the first part of the file is read.
+        var heads = await ReadHeadsAsync(ffmpeg, path, tracks.Select(t => (t, IsSrt(t.Codec) ? "srt" : "assx")), 600, ct).ConfigureAwait(false);
+        if (heads.Count == 0) return info;
+        return info with
+        {
+            Subs = info.Subs!.Select(t => !heads.TryGetValue(t.Index, out var h) ? t
+                : IsSrt(t.Codec) ? t with { SizeTags = SubtitleCheck.HasSizeTags(h) }
+                : t with { TextScale = SubtitleCheck.Scale(SubtitleCheck.ParseAss(h)) }).ToList()
+        };
+    }
+
+    /// <summary>
+    /// For every track the plan writes as SRT inside the file (converted from another format, or SRT with font tags): the track as an
+    /// SRT file with its font tags removed, to be muxed in its place. Tracks that fail fall back to the normal conversion.
+    /// </summary>
+    private async Task<(Dictionary<int, string> Files, DirectoryInfo? Dir)> CleanSrtTracksAsync(string ffmpeg, string source, SubPlan plan, Job? job, CancellationToken ct)
+    {
+        var files = new Dictionary<int, string>();
+        var wanted = Enumerable.Range(0, plan.Keep.Count).Where(i => plan.OutCodecs[i] == "srt").ToList();
+        if (wanted.Count == 0) return (files, null);
+        var dir = Directory.CreateTempSubdirectory("hbconv-srt-");
+        var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleCheck.DumpArgs(source, wanted.Select(i => (plan.Keep[i].Index, "srt", Path.Combine(dir.FullName, i + ".srt")))), job, ct).ConfigureAwait(false);
+        if (!ok) { _log.LogWarning("Could not prepare clean SRT tracks: {Why}", tail); return (files, dir); }
+        foreach (var i in wanted)
+        {
+            var f = Path.Combine(dir.FullName, i + ".srt");
+            if (!File.Exists(f) || new FileInfo(f).Length == 0) continue;
+            await File.WriteAllTextAsync(f, SubtitleCheck.CleanSrt(await File.ReadAllTextAsync(f, ct).ConfigureAwait(false)), ct).ConfigureAwait(false);
+            files[i] = f;
+        }
+
+        return (files, dir);
+    }
+
+    /// <summary>
+    /// Tools > Check a title: the video, every audio track and every subtitle track of <paramref name="path"/> (with styles, canvas size,
+    /// font sizes and fonts), and what <paramref name="profile"/> would make of each, including whether the subtitles keep their look.
+    /// Reads only; changes nothing.
+    /// </summary>
+    public async Task<TitleReport> CheckTitleAsync(string path, ConversionProfile profile, CancellationToken ct)
+    {
+        var info = await _probe.ProbeAsync(path, ct).ConfigureAwait(false);
+        if (info == null) return new TitleReport(Path.GetFileName(path), string.Empty, string.Empty, string.Empty, Array.Empty<string>(), string.Empty, Array.Empty<SubtitleReportTrack>(), Array.Empty<string>(), "Could not read the file with ffprobe.");
+        var (hb, ext) = ResolveContainer(profile, path);
+        var mp4 = IsMp4(ext);
+
+        // ---- video
+        var range = info.DolbyVision ? "Dolby Vision" : info.IsHdr ? "HDR" : "SDR";
+        var video = $"{TranscodeInsights.Name(TranscodeLog.Family(info.VideoCodec))}, {info.Height}p, {info.BitDepth}-bit, {range}{(info.Interlaced ? ", interlaced" : string.Empty)}";
+        string videoAfter;
+        if (info.DolbyVision && hb.HdrMode != "ignore") videoAfter = "Left alone: Dolby Vision files are skipped";
+        else if (info.IsHdr && hb.HdrMode == "skip") videoAfter = "Left alone: HDR files are skipped with these settings";
+        else
+        {
+            var encoder = hb.Encoder;
+            var tenBit = HandBrakeArgs.TenBit(encoder);
+            var keeps10 = tenBit != null && (info.IsHdr && hb.HdrMode == "keep" || info.BitDepth >= 10 && hb.BitDepth != "8bit");
+            if (keeps10) encoder = tenBit!;
+            var height = hb.MaxHeight > 0 && info.Height > hb.MaxHeight ? hb.MaxHeight : info.Height;
+            var outBits = encoder.Contains("10bit", StringComparison.OrdinalIgnoreCase) || encoder.Contains("_10", StringComparison.OrdinalIgnoreCase) ? 10 : 8;
+            videoAfter = $"{encoder}, quality {hb.Quality}, {height}p, {outBits}-bit{(info.IsHdr && hb.HdrMode == "keep" ? ", HDR kept" : string.Empty)}, never cropped" +
+                (info.Interlaced && hb.Deinterlace != "off" ? ", interlacing cleaned up" : string.Empty);
+        }
+
+        // ---- audio
+        var keptAudio = AudioPlanner.Select(info.AudioLangs, hb.AudioLanguages);
+        var audio = new List<string>();
+        for (var n = 1; n <= info.AudioTracks; n++)
+        {
+            var lang = info.AudioLangs != null && n <= info.AudioLangs.Count && info.AudioLangs[n - 1].Length > 0 ? info.AudioLangs[n - 1] : "und";
+            var st = info.Audio != null && n <= info.Audio.Count ? info.Audio[n - 1] : null;
+            var now = st != null ? $"{st.Codec.ToUpperInvariant()} {AudioLayout(st.Channels)}{(st.ObjectAudio ? (st.Profile.Contains("Atmos", StringComparison.OrdinalIgnoreCase) ? " Atmos" : " DTS:X") : string.Empty)}" : "?";
+            string after;
+            if (keptAudio != null && !keptAudio.Contains(n)) after = "removed (language not in the list)";
+            else if (st == null) after = "kept";
+            else
+            {
+                var t = HandBrakeArgs.AudioTrack(hb, st, mp4);
+                after = t.Encoder == "copy" ? "copied exactly as it is"
+                    : $"{(t.Encoder == "ac3" ? "AC3" : "AAC")} {(t.Mixdown switch { "mono" => "mono", "stereo" => "stereo", "5point1" => "5.1", _ => "7.1" })}, {t.Bitrate} kbps";
+            }
+
+            audio.Add($"Track {n} · {lang} · {now} → {after}");
+        }
+
+        info = await MeasureTextAsync(path, info, ct).ConfigureAwait(false);
+        var subs = info.Subs ?? Array.Empty<SubStream>();
+        var plan = hb.SubtitleMode == "keep" ? SubtitlePlanner.Make(subs, hb, mp4, KeptAudioLanguages(info, AudioPlanner.Select(info.AudioLangs, hb.AudioLanguages))) : null;
+        var attachments = info.Attachments ?? Array.Empty<string>();
+
+        // The look of styled tracks comes from their header; MOV_TEXT is decoded the way players and Jellyfin draw it, to measure its size.
+        var ffmpeg = _probe.FfmpegPath();
+        var looks = ffmpeg == null ? new Dictionary<int, AssLook>()
+            : await ReadLooksAsync(ffmpeg, path, subs.Where(t => SubtitlePlanner.IsStyled(t.Codec) || SubtitlePlanner.IsMovText(t.Codec)), ct).ConfigureAwait(false);
+
+        static string Norm(string x) => new string(x.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        var attachedNames = attachments.Select(a => Norm(Path.GetFileNameWithoutExtension(a))).ToList();
+
+        var tracks = new List<SubtitleReportTrack>();
+        foreach (var t in subs)
+        {
+            var isStyled = SubtitlePlanner.IsStyled(t.Codec);
+            var kind = isStyled ? "Styled" : SubtitlePlanner.IsText(t.Codec) ? "Text" : "Pictures";
+            looks.TryGetValue(t.Index, out var look);
+            var missing = look == null || !isStyled ? new List<string>() : look.Fonts.Where(f => !attachedNames.Any(n => n.Contains(Norm(f), StringComparison.Ordinal) || Norm(f).Contains(n, StringComparison.Ordinal))).ToList();
+            string outcome, result;
+            if (hb.SubtitleMode == "burn") { outcome = "Burned into the picture if it is the chosen track, otherwise removed"; result = "The burned track looks exactly as it does now (drawn into the picture)"; }
+            else if (hb.SubtitleMode == "none" || plan == null) { outcome = "Removed"; result = "—"; }
+            else
+            {
+                var i = plan.Keep.ToList().IndexOf(t);
+                var files = plan.External.Where(x => x.Track == t).Select(x => x.Format).ToList();
+                var parts = new List<string>();
+                if (i >= 0) parts.Add(plan.OutCodecs[i] switch { "copy" => "kept inside, exactly as it is", "srt" => "kept inside as SRT", "mov_text" => "kept inside as MOV_TEXT", var c => "kept inside as " + c });
+                parts.AddRange(files.Select(f => f switch { "ass" => "separate .ass file, exactly as it is", "sup" => "separate .sup file, exactly as it is", _ => "separate plain .srt file" }));
+                var exact = (i >= 0 && plan.OutCodecs[i] == "copy") || files.Contains("ass") || files.Contains("sup");
+                if (parts.Count == 0)
+                {
+                    outcome = SubtitlePlanner.OutCodec(t.Codec, hb, mp4) == null && !(mp4 && (isStyled || SubtitlePlanner.IsPgs(t.Codec))) ? "Dropped: " + ext.TrimStart('.').ToUpperInvariant() + " can't hold it" : "Not kept (its language isn't in the list)";
+                    result = "—";
+                }
+                else
+                {
+                    outcome = char.ToUpperInvariant(parts[0][0]) + string.Join(", ", parts)[1..];
+                    result = t.Giant && !(i >= 0)
+                        ? $"Its text is drawn at {t.TextScale:P0} of the picture height per line (normal is about 5%), so it shows giant when streamed. As a separate .srt file players draw it at their normal size"
+                        : t.Giant ? $"Kept as it is, so still giant: drawn at {t.TextScale:P0} of the picture height per line (normal is about 5%). Choose SRT for plain text subtitles to fix it"
+                        : exact
+                        ? isStyled && mp4 ? "Same look; fonts can't travel with a separate file, so players use their own if they don't have them" : "Same look: identical fonts, sizes, colours and positions"
+                        : isStyled ? "Same text and timing, but the styling (fonts, sizes, colours, positions) is lost" : "Same text and timing; italics and bold are kept";
+                }
+            }
+
+            tracks.Add(new SubtitleReportTrack(t.Index + 1, kind, t.Codec, t.Language.Length > 0 ? t.Language : "und", t.Title, t.Forced, outcome, result, look, missing));
+        }
+
+        var note = subs.Count == 0 ? "This file has no subtitle tracks." : string.Empty;
+        return new TitleReport(Path.GetFileName(path), ext.TrimStart('.').ToUpperInvariant(), video, videoAfter, audio, plan?.Summary ?? string.Empty, tracks, attachments, note);
+    }
+
+    private static string AudioLayout(int ch) => ch switch { 0 => string.Empty, 1 => "mono", 2 => "stereo", 6 => "5.1", 8 => "7.1", _ => ch + " channels" };
+
+    /// <summary>
+    /// Writes the given subtitle tracks of <paramref name="source"/> to temporary files. Failed lists the files ffmpeg could not write
+    /// (a track with no lines at all gives no file and is not a failure); see <see cref="LostSubtitles"/>.
+    /// </summary>
+    private async Task<(List<(string Temp, string Final)> Made, List<string> Failed)> ExtractSidecarsAsync(string ffmpeg, string source, List<(SubStream Track, string Path)> items, Job? job, CancellationToken ct)
     {
         var made = new List<(string, string)>();
+        var failed = new List<string>();
         foreach (var (track, path) in items)
         {
             if (File.Exists(path)) continue; // never overwrite a subtitle file that is already there
             var tmp = path + ".hbtmp";
             TryDelete(tmp);
             _state.TrackTemp(tmp);
-            var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.ExtractArgs(source, track.Index, tmp), job, ct).ConfigureAwait(false);
+            var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.ExtractArgs(source, track.Index, tmp, Path.GetExtension(path).TrimStart('.').ToLowerInvariant()), job, ct).ConfigureAwait(false);
             if (ok && File.Exists(tmp) && new FileInfo(tmp).Length > 0)
             {
+                if (path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
+                    await File.WriteAllTextAsync(tmp, SubtitleCheck.CleanSrt(await File.ReadAllTextAsync(tmp, ct).ConfigureAwait(false)), ct).ConfigureAwait(false);
                 FileMeta.CopyAccess(source, tmp);
                 made.Add((tmp, path));
             }
@@ -660,11 +1138,26 @@ public sealed class ConversionService : BackgroundService
             {
                 TryDelete(tmp);
                 _state.UntrackTemp(tmp);
-                _log.LogWarning("Could not write subtitle file {File}: {Why}", path, tail);
+                if (!ok)
+                {
+                    failed.Add(path);
+                    _log.LogWarning("Could not write subtitle file {File}: {Why}", path, tail);
+                }
             }
         }
 
-        return made;
+        return (made, failed);
+    }
+
+    /// <summary>
+    /// A track that only exists as a separate file (it is taken out of the video) must not be lost when that file could not be written:
+    /// returns why the original has to be kept, or null when nothing is lost.
+    /// </summary>
+    private static string? LostSubtitles(SubPlan plan, List<(SubStream Track, string Path)> planned, List<string> failed)
+    {
+        var lost = planned.Where(x => failed.Contains(x.Path) && !plan.Keep.Contains(x.Track)).Select(x => Path.GetFileName(x.Path)).ToList();
+        return lost.Count == 0 ? null
+            : $"Kept the original: could not write {string.Join(", ", lost)}, and that subtitle track would not be inside the converted file.";
     }
 
     private static readonly System.Text.RegularExpressions.Regex SubtitleFileTail = new(@"^(\.[A-Za-z0-9\-]{1,12}){0,3}\.(srt|ass|ssa|sub|idx|vtt|sup)$", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
@@ -810,10 +1303,11 @@ public sealed class ConversionService : BackgroundService
 
         var info = await _probe.ProbeAsync(target, ct).ConfigureAwait(false);
         if (info == null) return false;
+        info = await MeasureTextAsync(target, info, ct).ConfigureAwait(false);
         var mp4 = IsMp4(Path.GetExtension(target));
         SubPlan? sp = hb.SubtitleMode == "none"
             ? (info.SubtitleTracks > 0 ? new SubPlan(Array.Empty<SubStream>(), Array.Empty<string>(), info.SubtitleTracks, "all subtitle tracks removed") { NeedsWork = true } : null)
-            : SubtitlePlanner.Make(info.Subs, hb, mp4);
+            : SubtitlePlanner.Make(info.Subs, hb, mp4, info.AudioLangs);
         // Separate subtitle files that are wanted but not there yet.
         var wantedSidecars = hb.SubtitleMode == "keep" && sp != null ? SubtitleSidecars.Plan(target, sp.External) : new List<(SubStream Track, string Path)>();
         var missing = wantedSidecars.Where(x => !File.Exists(x.Path)).ToList();
@@ -824,7 +1318,7 @@ public sealed class ConversionService : BackgroundService
             // Only the separate files are missing: write them from the video's own subtitle tracks, nothing else changes.
             if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Running");
             _board.Set(s => { s.State = "Encoding"; s.Message = "Writing subtitle files…"; s.CurrentFile = target; s.CurrentJobId = w.Job?.Id ?? string.Empty; s.Progress = 50; s.Eta = string.Empty; s.Suspended = false; s.Origin = w.Origin; });
-            var onlyFiles = await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false);
+            var (onlyFiles, _) = await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false);
             FinishSidecars(onlyFiles, swapped: true);
             if (w.Job != null) _jobs.SetStatus(w.Job.Id, "Done");
             Record(w, "Converted", $"Subtitle files written next to it ({onlyFiles.Count}); video and audio untouched", new FileInfo(target).Length, new FileInfo(target).Length, 0, Path.GetFileName(target));
@@ -852,8 +1346,22 @@ public sealed class ConversionService : BackgroundService
         _log.LogInformation("{Target}: fixing subtitles only ({Plan})", target, sp.Summary);
 
         // Separate files first: they are taken from the tracks that are about to be rewritten.
-        var fixSidecars = missing.Count > 0 ? await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false) : new List<(string Temp, string Final)>();
-        var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.Args(target, null, sp, mp4, plan.Temp), w.Job, ct).ConfigureAwait(false);
+        var fixSidecars = new List<(string Temp, string Final)>();
+        if (missing.Count > 0)
+        {
+            var (made, failed) = await ExtractSidecarsAsync(ffmpeg, target, missing, w.Job, ct).ConfigureAwait(false);
+            fixSidecars = made;
+            if (LostSubtitles(sp, missing, failed) is { } lost)
+            {
+                FinishSidecars(fixSidecars, false);
+                Fail(w, lost, plan.Clock.Elapsed.TotalSeconds);
+                return true;
+            }
+        }
+
+        var (clean, cleanDir) = await CleanSrtTracksAsync(ffmpeg, target, sp, w.Job, ct).ConfigureAwait(false);
+        var (ok, tail) = await RunFfmpegAsync(ffmpeg, SubtitleMux.Args(target, null, sp, mp4, plan.Temp, clean), w.Job, ct).ConfigureAwait(false);
+        try { cleanDir?.Delete(true); } catch { }
         if (!ok || !File.Exists(plan.Temp) || new FileInfo(plan.Temp).Length < 100_000)
         {
             TryDelete(plan.Temp);
@@ -866,6 +1374,7 @@ public sealed class ConversionService : BackgroundService
         var result = await _probe.ProbeAsync(plan.Temp, ct).ConfigureAwait(false);
         var bad = result == null ? "Could not read the fixed file with ffprobe, so it was not used (the file was left as it was)."
             : ResultCheck.Problem(info, result, hb, mp4, sp.Keep.Count);
+        if (bad == null && sp.Keep.Count > 0 && cfg.VerifyDuration) bad = await CheckSubtitlesAsync(ffmpeg, target, plan.Temp, sp, w.Job, ct).ConfigureAwait(false);
         if (bad != null) { TryDelete(plan.Temp); FinishSidecars(fixSidecars, false); Fail(w, bad, plan.Clock.Elapsed.TotalSeconds); return true; }
 
         if (!await WaitForViewersAsync(plan, ct).ConfigureAwait(false)) { FinishSidecars(fixSidecars, false); return true; }
@@ -959,6 +1468,8 @@ public sealed class ConversionService : BackgroundService
         var bad = p.SourceInfo == null || result == null
             ? "Could not read the file details with ffprobe, so the result was not trusted (original kept). Turn off the check in Original files > After converting if ffprobe is unavailable."
             : ResultCheck.Problem(p.SourceInfo, result, p.HandBrake, Path.GetExtension(p.Final).Equals(".mp4", StringComparison.OrdinalIgnoreCase), p.SubPlan?.Keep.Count, p.AudioTracks?.Length);
+        if (bad == null && p.SubPlan is { Keep.Count: > 0 } && p.Ffmpeg != null)
+            bad = await CheckSubtitlesAsync(p.Ffmpeg, p.Source, p.Temp, p.SubPlan, job, ct).ConfigureAwait(false);
         if (bad == null) return true;
 
         TryDelete(p.Temp);
@@ -1161,7 +1672,11 @@ public sealed class ConversionService : BackgroundService
 
     private static string Hash(HandBrakeSettings hb)
     {
-        var text = string.Join(' ', HandBrakeArgs.Build(hb, "in", "out"));
+        // "--crop 0:0:0:0" is left out so files converted before cropping was switched off still count as converted with these settings.
+        var args = HandBrakeArgs.Build(hb, "in", "out");
+        var crop = args.IndexOf("--crop");
+        if (crop >= 0) args.RemoveRange(crop, 2);
+        var text = string.Join(' ', args);
         if (!string.IsNullOrWhiteSpace(hb.AudioLanguages)) text += " |audio-languages=" + hb.AudioLanguages.Trim().ToLowerInvariant();
         var hash = System.Security.Cryptography.SHA1.HashData(System.Text.Encoding.UTF8.GetBytes(text));
         return Convert.ToHexString(hash, 0, 8);

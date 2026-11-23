@@ -15,7 +15,7 @@ namespace Jellyfin.Plugin.HandBrakeConverter.Services;
 
 /// <summary>
 /// Asks the installed HandBrake which video encoders it can use here (HandBrake only lists NVENC/QSV when it finds the hardware),
-/// and can prove one works with a 2-second sample encode (Encoder test tab).
+/// and can prove one works with a 2-second sample encode (Tools > Encoder test).
 /// </summary>
 public class EncoderTestResult
 {
@@ -99,7 +99,7 @@ public class HandBrakeCapabilities
         return names;
     }
 
-    /// <summary>Encodes a 2-second generated clip with <paramref name="encoder"/>. Used by the Test buttons on the Encoder test tab.</summary>
+    /// <summary>Encodes a 2-second generated clip with <paramref name="encoder"/>. Used by the Test buttons in Tools > Encoder test.</summary>
     public async Task<(bool Ok, string Message)> TestAsync(HandBrakeLocator.Launcher launcher, string encoder, CancellationToken ct)
     {
         if (!Name.IsMatch(encoder)) return (false, "Unknown encoder name.");
